@@ -1,12 +1,16 @@
 /**
  * ============================================================================
- * RATE LIMITING ET PROTECTION CONTRE LES ATTAQUES
+ * RATE LIMITING ET PROTECTION CONTRE LES ATTAQUES - VERSION OPTIMISÉE
  * ============================================================================
- * Protection brute-force, DDoS, et abus d'API
+ * Protection brute-force, DDoS, et abus d'API avec cache local
  */
 
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { RATE_LIMIT_CONFIG } from './config';
+
+// Cache local pour les IPs déjà vérifiées (évite les appels Redis/DB répétés)
+const localCache = new Map<string, { allowed: boolean; expiry: number }>();
+const LOCAL_CACHE_TTL = 1000; // 1 seconde
 
 // Rate limiter pour les tentatives de connexion (anti brute-force)
 export const loginRateLimiter = new RateLimiterMemory({
@@ -39,10 +43,8 @@ export const ipRateLimiter = new RateLimiterMemory({
 });
 
 /**
- * Vérifie si une requête est autorisée selon le rate limiting
- * @param limiter - Le rate limiter à utiliser
- * @param key - La clé d'identification (IP, userId, etc.)
- * @returns Objet avec success et les infos de limites
+ * Vérifie si une requête est autorisée selon le rate limiting - VERSION OPTIMISÉE
+ * Utilise un cache local pour éviter les appels répétés
  */
 export async function checkRateLimit(
   limiter: RateLimiterMemory,
@@ -54,8 +56,22 @@ export async function checkRateLimit(
   reset: number;
   msBeforeNext?: number;
 }> {
+  // Vérifier le cache local d'abord
+  const cacheKey = `${limiter.keyPrefix}:${key}`;
+  const cached = localCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return {
+      success: cached.allowed,
+      limit: limiter.points,
+      remaining: cached.allowed ? limiter.points - 1 : 0,
+      reset: Math.floor(Date.now() / 1000) + 1,
+    };
+  }
+
   try {
     const res = await limiter.consume(key);
+    // Mettre en cache le résultat positif
+    localCache.set(cacheKey, { allowed: true, expiry: Date.now() + LOCAL_CACHE_TTL });
     return {
       success: true,
       limit: limiter.points,
@@ -65,6 +81,8 @@ export async function checkRateLimit(
     };
   } catch (rejRes) {
     if (rejRes instanceof RateLimiterRes) {
+      // Mettre en cache le résultat négatifa
+      localCache.set(cacheKey, { allowed: false, expiry: Date.now() + LOCAL_CACHE_TTL });
       return {
         success: false,
         limit: limiter.points,

@@ -163,7 +163,7 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-400">Administration</p>
           </div>
         </div>
-        
+
         <nav className="p-4 space-y-1">
           {TABS.map((tab) => (
             <button
@@ -172,18 +172,17 @@ export default function DashboardPage() {
                 setActiveTab(tab.id);
                 setSidebarOpen(false);
               }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                activeTab === tab.id 
-                  ? 'bg-blue-600 text-white' 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === tab.id
+                  ? 'bg-blue-600 text-white'
                   : 'text-slate-300 hover:bg-slate-800'
-              }`}
+                }`}
             >
               <tab.icon className="w-5 h-5" />
               <span>{tab.label}</span>
             </button>
           ))}
         </nav>
-        
+
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-800">
           <button
             onClick={handleLogout}
@@ -194,15 +193,15 @@ export default function DashboardPage() {
           </button>
         </div>
       </aside>
-      
+
       {/* Overlay pour mobile */}
       {sidebarOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      
+
       {/* Main content */}
       <main className="flex-1 overflow-y-auto">
         {/* Header */}
@@ -215,12 +214,12 @@ export default function DashboardPage() {
               >
                 <Menu className="w-6 h-6" />
               </button>
-              
+
               <h1 className="text-xl font-semibold text-gray-900">
                 {TABS.find(t => t.id === activeTab)?.label || 'Tableau de bord'}
               </h1>
             </div>
-            
+
             <div className="flex items-center gap-4">
               {/* Sélecteur de période (uniquement pour overview) */}
               {activeTab === 'overview' && (
@@ -229,18 +228,17 @@ export default function DashboardPage() {
                     <button
                       key={range}
                       onClick={() => setTimeRange(range)}
-                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                        timeRange === range
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${timeRange === range
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
-                      }`}
+                        }`}
                     >
                       {range === '24h' ? '24 heures' : range === '7d' ? '7 jours' : '30 jours'}
                     </button>
                   ))}
                 </div>
               )}
-              
+
               {/* Bouton refresh */}
               <button
                 onClick={loadDashboardData}
@@ -249,13 +247,13 @@ export default function DashboardPage() {
               >
                 <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
-              
+
               {/* Notifications */}
               <button className="relative p-2 hover:bg-gray-100 rounded-lg transition-colors">
                 <Bell className="w-5 h-5" />
                 <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
               </button>
-              
+
               {/* Profil utilisateur */}
               <div className="flex items-center gap-3 pl-4 border-l border-gray-200">
                 <div className="text-right hidden sm:block">
@@ -275,7 +273,7 @@ export default function DashboardPage() {
             </div>
           </div>
         </header>
-        
+
         {/* Contenu de l'onglet */}
         <div className="p-6">
           {renderTabContent()}

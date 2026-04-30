@@ -92,24 +92,34 @@ export async function POST(request: NextRequest) {
       attempts++;
     }
 
-    // Récupérer les infos des passagers par matricule
-    const passagers = [];
+    // Récupérer les infos des passagers par matricule - VERSION OPTIMISÉE
+    let passagers: any[] = [];
     if (passagerMatricules && passagerMatricules.length > 0) {
-      for (const matricule of passagerMatricules) {
-        const citoyen = await prisma.citoyen.findUnique({
-          where: { matricule: matricule.toUpperCase() },
-        });
-        if (citoyen) {
-          passagers.push({
-            citoyenId: citoyen.id,
-            matricule: citoyen.matricule,
-            nom: citoyen.nom,
-            prenom: citoyen.prenom,
-            telephone: citoyen.telephone,
-            typePersonne: citoyen.typePersonne,
-          });
-        }
-      }
+      // Requête unique avec findMany au lieu de boucle N+1
+      const citoyens = await prisma.citoyen.findMany({
+        where: {
+          matricule: {
+            in: passagerMatricules.map((m: string) => m.toUpperCase()),
+          },
+        },
+        select: {
+          id: true,
+          matricule: true,
+          nom: true,
+          prenom: true,
+          telephone: true,
+          typePersonne: true,
+        },
+      });
+      
+      passagers = citoyens.map((citoyen) => ({
+        citoyenId: citoyen.id,
+        matricule: citoyen.matricule,
+        nom: citoyen.nom,
+        prenom: citoyen.prenom,
+        telephone: citoyen.telephone,
+        typePersonne: citoyen.typePersonne,
+      }));
     }
 
     // Créer le trajet

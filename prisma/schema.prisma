@@ -226,6 +226,9 @@ model Citoyen {
   /// Trajets déclarés par ce citoyen (pour voitures particulières)
   trajetsDeclares Trip[] @relation("TripDeclarantCitoyen")
   
+  /// Employeurs de ce chauffeur
+  employeurs      EmployeChauffeur[]
+  
   @@map("citoyens")
 }
 
@@ -338,6 +341,9 @@ model Entreprise {
   /// Trajets déclarés par l'entreprise
   trajets           Trip[] @relation("TripDeclarantEntreprise")
   
+  /// Chauffeurs employés par cette entreprise
+  chauffeurs        EmployeChauffeur[]
+  
   @@map("entreprises")
 }
 
@@ -380,7 +386,45 @@ model Compagnie {
   /// Trajets déclarés
   trajets           Trip[] @relation("TripDeclarantCompagnie")
   
+  /// Chauffeurs employés par cette compagnie
+  chauffeurs        EmployeChauffeur[]
+  
   @@map("compagnies")
+}
+
+/// Statut d'un employé dans une entreprise
+enum StatutEmploye {
+  ACTIF       /// Employé actif
+  INACTIF     /// Ancien employé ou inactif
+  SUSPENDU    /// Employé suspendu
+}
+
+/// Relation entre un chauffeur (Citoyen) et son employeur (Entreprise ou Compagnie)
+model EmployeChauffeur {
+  id                String   @id @default(uuid())
+  
+  /// Le chauffeur (Citoyen)
+  citoyenId         String   @map("citoyen_id")
+  
+  /// Employeur (soit une Entreprise, soit une Compagnie)
+  entrepriseId      String?  @map("entreprise_id")
+  compagnieId       String?  @map("compagnie_id")
+  
+  /// Statut
+  statut            StatutEmploye @default(ACTIF)
+  
+  /// Dates
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  citoyen           Citoyen     @relation(fields: [citoyenId], references: [id])
+  entreprise        Entreprise? @relation(fields: [entrepriseId], references: [id])
+  compagnie         Compagnie?  @relation(fields: [compagnieId], references: [id])
+  
+  @@unique([citoyenId, entrepriseId])
+  @@unique([citoyenId, compagnieId])
+  @@map("employe_chauffeurs")
 }
 
 /// Profil Super Admin (État)

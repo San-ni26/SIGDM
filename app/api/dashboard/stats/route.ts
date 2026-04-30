@@ -318,7 +318,8 @@ async function getRecentAnomalies(limit: number, regionFilter?: string | null) {
 }
 
 /**
- * Récupère les meilleurs agents
+ * Récupère les meilleurs agents - VERSION OPTIMISÉE
+ * Utilise une seule requête avec include au lieu de N+1
  */
 async function getTopAgents(limit: number, startDate: Date, regionFilter?: string | null) {
   const where = regionFilter ? {
@@ -328,34 +329,55 @@ async function getTopAgents(limit: number, startDate: Date, regionFilter?: strin
     timestampPassage: { gte: startDate },
   };
   
-  const agents = await prisma.passage.groupBy({
-    by: ['agentId'],
+  // Requête optimisée avec relation include
+  const passagesWithAgents = await prisma.passage.findMany({
     where,
-    _count: {
-      id: true,
-    },
-    orderBy: {
-      _count: {
-        id: 'desc',
+    select: {
+      agent: {
+        select: {
+          id: true,
+          nom: true,
+          prenom: true,
+          typeAgent: true,
+        },
       },
     },
-    take: limit,
   });
   
-  const agentDetails = await Promise.all(
-    agents.map(async (a) => {
-      const agent = await prisma.agent.findUnique({
-        where: { id: a.agentId },
-        select: { nom: true, prenom: true, typeAgent: true },
-      });
-      return {
-        ...agent,
-        passagesCount: a._count.id,
-      };
-    })
-  );
+  // Agrégation en mémoire
+  const agentStats = new Map<string, { 
+    nom: string; 
+    prenom: string; 
+    typeAgent: string; 
+    count: number 
+  }>();
   
-  return agentDetails;
+  for (const passage of passagesWithAgents) {
+    if (!passage.agent) continue;
+    const agent = passage.agent;
+    const existing = agentStats.get(agent.id);
+    if (existing) {
+      existing.count++;
+    } else {
+      agentStats.set(agent.id, {
+        nom: agent.nom,
+        prenom: agent.prenom,
+        typeAgent: agent.typeAgent,
+        count: 1,
+      });
+    }
+  }
+  
+  // Trier et limiter
+  return Array.from(agentStats.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
+    .map(a => ({
+      nom: a.nom,
+      prenom: a.prenom,
+      typeAgent: a.typeAgent,
+      passagesCount: a.count,
+    }));
 }
 
 /**
