@@ -39,7 +39,7 @@ export default function MarchandisesPage() {
       const data = await res.json();
       
       // Filtrer uniquement les trajets qui ont une marchandise déclarée
-      const goods = (data.data || []).filter((t: Trip) => t.typeMarchandise !== null && t.typeMarchandise.trim() !== '');
+      const goods = (data.data || []).filter((t: Trip) => t.typeMarchandise && t.typeMarchandise.trim() !== '');
       setTripsWithGoods(goods);
     } catch (error) {
       console.error(error);
