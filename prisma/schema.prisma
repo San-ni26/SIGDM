@@ -1,0 +1,1159 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted database in seconds: `npx create-db`
+
+// ============================================================================
+// PLATEFORME NATIONALE DE DIGITALISATION DES DÉPLACEMENTS - MALI
+// ============================================================================
+// Schéma Prisma complet pour la gestion des déplacements internes,
+// entrées/sorties du territoire, et contrôles aux postes/frontières
+// ============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================================
+// ENUMÉRATIONS DU SYSTÈME
+// ============================================================================
+
+/// Type d'utilisateur dans le système - Définit le rôle et les permissions
+enum UserType {
+  SUPER_ADMIN      /// Super Administrateur État - Accès total au système
+  AGENT_CONTROLE   /// Agent de police/contrôle aux postes
+  AGENT_DOUANE     /// Agent des douanes aux frontières
+  AGENT_PEAGE      /// Agent de péage
+  ENTREPRISE       /// Entreprise de transport (logistique, camions)
+  COMPAGNIE        /// Compagnie de transport public (bus, cars)
+  CITOYEN          /// Voyageur individuel
+}
+
+/// Statut d'un compte utilisateur
+enum AccountStatus {
+  ACTIF      /// Compte actif et fonctionnel
+  INACTIF    /// Compte désactivé temporairement
+  SUSPENDU   /// Compte suspendu pour violation
+  EN_ATTENTE /// Compte en attente de validation
+}
+
+/// Type de poste de contrôle sur le territoire
+enum PostType {
+  CONTROLE   /// Poste de contrôle police/gendarmerie
+  PEAGE      /// Péage routier
+  DOUANE     /// Poste douanier frontière
+  FRONTIERE  /// Poste frontière international
+}
+
+/// Type de véhicule dans le système
+enum VehicleType {
+  VOITURE_PARTICULIERE  /// Véhicule personnel
+  CAMION                /// Camion de transport marchandises
+  CITERNE               /// Véhicule citerne
+  BUS                   /// Bus interurbain
+  CAR                   /// Car de voyage
+  MINIBUS               /// Minibus transport public
+  MOTO                  /// Motocyclette
+}
+
+/// Statut d'un trajet déclaré
+enum TripStatus {
+  EN_PREPARATION  /// Trajet créé mais pas encore commencé
+  EN_COURS        /// Trajet en cours de réalisation
+  TERMINE         /// Trajet terminé avec succès
+  ANNULE          /// Trajet annulé
+  BLOQUE          /// Trajet bloqué pour anomalie
+}
+
+/// Statut d'un passage à un poste de contrôle
+enum PassageStatus {
+  EN_ATTENTE   /// Véhicule en approche/non encore passé
+  VALIDE       /// Passage validé sans problème
+  ANOMALIE     /// Passage avec anomalie détectée
+  REFUSE       /// Passage refusé
+}
+
+/// Type d'anomalie pouvant être détectée
+enum AnomalyType {
+  PASSAGER_NON_DECLARE    /// Passagers non déclarés dans le véhicule
+  PLAQUE_INCORRECTE       /// Plaque d'immatriculation incorrecte
+  DOCUMENTS_MANQUANTS     /// Documents obligatoires manquants
+  SURCHARGE               /// Nombre de passagers supérieur à la capacité
+  MARCHANDISE_NON_DECLARE /// Marchandise non déclarée
+  CONDUITE_DANGEREUSE     /// Comportement dangereux signalé
+  FAUX_DOCUMENTS          /// Falsification de documents
+  VEHICULE_VOLE           /// Véhicule signalé volé
+  AUTRE                   /// Autre type d'anomalie
+}
+
+/// Résultat de la vérification terrain
+enum VerificationResult {
+  CONFORME     /// Tout est conforme à la déclaration
+  ANOMALIE     /// Anomalie détectée
+  REFUS        /// Refus de passage
+}
+
+/// Type d'action pour l'audit trail
+enum AuditActionType {
+  CREATION         /// Création d'une entité
+  MODIFICATION     /// Modification d'une entité
+  SUPPRESSION      /// Suppression logique
+  CONNEXION        /// Connexion utilisateur
+  DECONNEXION      /// Déconnexion utilisateur
+  VALIDATION       /// Validation d'un passage
+  DECLARATION      /// Déclaration d'un trajet
+  VERIFICATION     /// Vérification terrain
+  SIGNALEMENT      /// Signalement d'anomalie
+  EXPORT           /// Export de données
+  CONSULTATION     /// Consultation de données sensibles
+}
+
+// ============================================================================
+// MODÈLES UTILISATEURS ET AUTHENTIFICATION
+// ============================================================================
+
+/// Modèle principal utilisateur - Point central d'authentification
+/// Chaque utilisateur (citoyen, agent, entreprise) a un compte unique
+model User {
+  id            String        @id @default(uuid())
+  email         String?       @unique  /// Email optionnel pour certains types (citoyens peuvent ne pas avoir d'email)
+  passwordHash  String?       @map("password_hash")  /// Hash du mot de passe (null pour connexion par matricule/code)
+  userType      UserType      @map("user_type")
+  status        AccountStatus @default(EN_ATTENTE)
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  lastLoginAt   DateTime?     @map("last_login_at")
+  
+  /// Relations polymorphes vers les profils spécifiques
+  /// Un utilisateur a un et un seul profil selon son type
+  citoyen       Citoyen?       @relation("UserCitoyen")
+  agent         Agent?         @relation("UserAgent")
+  entreprise    Entreprise?    @relation("UserEntreprise")
+  compagnie     Compagnie?     @relation("UserCompagnie")
+  superAdmin    SuperAdmin?    @relation("UserSuperAdmin")
+  
+  /// Sessions de connexion pour traçabilité
+  sessions      UserSession[]
+  
+  /// Logs d'audit - Toutes les actions de l'utilisateur
+  auditLogs     AuditLog[]
+  
+  @@map("users")
+}
+
+/// Sessions utilisateur pour la gestion des connexions et la sécurité
+model UserSession {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  token        String    @unique  /// Token JWT ou session
+  ipAddress    String?   @map("ip_address")
+  userAgent    String?   @map("user_agent")
+  deviceInfo   String?   @map("device_info")  /// Info sur l'appareil (mobile/desktop)
+  gpsLatitude  Decimal?  @map("gps_latitude") @db.Decimal(10, 8)
+  gpsLongitude Decimal?  @map("gps_longitude") @db.Decimal(11, 8)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  
+  /// Relation vers l'utilisateur
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_sessions")
+}
+
+// ============================================================================
+// PROFILS UTILISATEURS SPÉCIFIQUES
+// ============================================================================
+
+/// Profil Citoyen (Voyageur individuel)
+/// Chaque citoyen a un matricule unique auto-généré de 5 caractères (lettres + chiffres)
+model Citoyen {
+  id              String   @id @default(uuid())
+  userId          String   @unique @map("user_id")
+  
+  /// Matricule unique auto-généré (ex: A3B7K) - Utilisé pour identifier le voyageur
+  matricule       String   @unique @db.VarChar(5)
+  
+  /// Informations personnelles
+  nom             String
+  prenom          String
+  dateNaissance   DateTime @map("date_naissance")
+  lieuNaissance   String   @map("lieu_naissance")
+  genre           Genre
+  typePersonne    TypePersonne @map("type_personne")  /// Adulte ou Enfant
+  
+  /// Contact
+  telephone       String   @unique
+  email           String?
+  
+  /// Photo de profil
+  photoUrl        String?  @map("photo_url")
+  
+  /// Pièce d'identité
+  typePiece       TypePiece? @map("type_piece")  /// Passeport, CNI, etc.
+  numeroPiece     String?    @map("numero_piece")
+  pieceScanUrl    String?    @map("piece_scan_url")
+  
+  /// Adresse
+  adresse         String?
+  ville           String?
+  region          String?
+  
+  /// Métadonnées
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  user            User     @relation("UserCitoyen", fields: [userId], references: [id], onDelete: Cascade)
+  
+  /// Véhicules possédés par ce citoyen
+  vehicules       Vehicle[] @relation("VehicleOwner")
+  
+  /// Trajets où ce citoyen est conducteur
+  trajetsConducteur Trip[] @relation("TripDriver")
+  
+  /// Participations en tant que passager
+  passagerTrips   PassagerTrip[]
+  
+  /// Trajets comme chauffeur pour entreprise
+  chauffeurTrips  Trip[] @relation("TripChauffeur")
+  
+  /// Trajets déclarés par ce citoyen (pour voitures particulières)
+  trajetsDeclares Trip[] @relation("TripDeclarantCitoyen")
+  
+  @@map("citoyens")
+}
+
+/// Genre de la personne
+enum Genre {
+  MASCULIN
+  FEMININ
+  AUTRE
+}
+
+/// Type de personne (adulte ou enfant)
+enum TypePersonne {
+  ADULTE
+  ENFANT
+}
+
+/// Type de pièce d'identité
+enum TypePiece {
+  CNI           /// Carte Nationale d'Identité
+  PASSEPORT     /// Passeport
+  CARTE_CONSULAIRE  /// Carte consulaire
+  PERMIS_SEJOUR /// Permis de séjour
+}
+
+/// Profil Agent (Police, Douane, Péage)
+/// Les agents sont assignés à des postes spécifiques
+model Agent {
+  id              String   @id @default(uuid())
+  userId          String   @unique @map("user_id")
+  
+  /// Matricule agent (différent du matricule citoyen)
+  matriculeAgent  String   @unique @map("matricule_agent")
+  
+  /// Informations professionnelles
+  nom             String
+  prenom          String
+  telephone       String   @unique
+  
+  /// Type d'agent
+  typeAgent       UserType @map("type_agent")  /// AGENT_CONTROLE, AGENT_DOUANE, AGENT_PEAGE
+  
+  /// Grade/Fonction
+  grade           String?
+  
+  /// Poste actuellement assigné (peut changer)
+  posteId         String?  @map("poste_id")
+  
+  /// Photo
+  photoUrl        String?  @map("photo_url")
+  
+  /// Dates
+  dateRecrutement DateTime @map("date_recrutement")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  user            User     @relation("UserAgent", fields: [userId], references: [id], onDelete: Cascade)
+  poste           Poste?   @relation(fields: [posteId], references: [id])
+  
+  /// Passages validés par cet agent
+  passages        Passage[]
+  
+  /// Anomalies signalées par cet agent
+  anomaliesSignalees Anomaly[]
+  
+  /// Vérifications effectuées
+  verifications   Verification[]
+  
+  @@map("agents")
+}
+
+/// Profil Entreprise (Logistique, Camions, Citernes)
+model Entreprise {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  
+  /// Informations entreprise
+  raisonSociale     String   @map("raison_sociale")
+  nif               String?  @unique @map("nif")  /// Numéro d'Identification Fiscale
+  registreCommerce  String?  @map("registre_commerce")
+  
+  /// Contact
+  telephone         String
+  email             String
+  adresse           String
+  ville             String
+  region            String
+  
+  /// Représentant légal
+  nomRepresentant   String   @map("nom_representant")
+  telephoneRep      String   @map("telephone_representant")
+  
+  /// Documents
+  documentUrl       String?  @map("document_url")
+  
+  /// Validation
+  validePar         String?  @map("valide_par")  /// ID du super admin qui a validé
+  dateValidation    DateTime? @map("date_validation")
+  
+  /// Métadonnées
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  user              User     @relation("UserEntreprise", fields: [userId], references: [id], onDelete: Cascade)
+  
+  /// Véhicules de la flotte
+  vehicules         Vehicle[]
+  
+  /// Trajets déclarés par l'entreprise
+  trajets           Trip[] @relation("TripDeclarantEntreprise")
+  
+  @@map("entreprises")
+}
+
+/// Profil Compagnie de Transport Public (Bus, Cars, Minibus)
+model Compagnie {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  
+  /// Informations compagnie
+  raisonSociale     String   @map("raison_sociale")
+  nif               String?  @unique @map("nif")
+  registreCommerce  String?  @map("registre_commerce")
+  licenceTransport  String?  @unique @map("licence_transport")  /// Licence de transport
+  
+  /// Contact
+  telephone         String
+  email             String
+  adresse           String
+  ville             String
+  region            String
+  
+  /// Représentant
+  nomRepresentant   String   @map("nom_representant")
+  telephoneRep      String   @map("telephone_representant")
+  
+  /// Validation
+  validePar         String?  @map("valide_par")
+  dateValidation    DateTime? @map("date_validation")
+  
+  /// Métadonnées
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  user              User     @relation("UserCompagnie", fields: [userId], references: [id], onDelete: Cascade)
+  
+  /// Véhicules de la compagnie
+  vehicules         Vehicle[]
+  
+  /// Trajets déclarés
+  trajets           Trip[] @relation("TripDeclarantCompagnie")
+  
+  @@map("compagnies")
+}
+
+/// Profil Super Admin (État)
+/// Accès complet à toutes les fonctionnalités de supervision
+model SuperAdmin {
+  id          String   @id @default(uuid())
+  userId      String   @unique @map("user_id")
+  
+  /// Informations
+  nom         String
+  prenom      String
+  telephone   String   @unique
+  
+  /// Niveau d'accès
+  niveauAcces NiveauAcces @default(NATIONAL) @map("niveau_acces")
+  
+  /// Région de supervision (si niveau régional)
+  regionId    String?  @map("region_id")
+  
+  /// Dates
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  user        User     @relation("UserSuperAdmin", fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("super_admins")
+}
+
+/// Niveau d'accès du Super Admin
+enum NiveauAcces {
+  NATIONAL    /// Accès à tout le pays
+  REGIONAL    /// Accès limité à une région
+}
+
+// ============================================================================
+// GESTION DES VÉHICULES
+// ============================================================================
+
+/// Véhicule enregistré dans le système
+/// Peut appartenir à un citoyen, une entreprise ou une compagnie
+model Vehicle {
+  id                String      @id @default(uuid())
+  
+  /// Immatriculation unique (plaque)
+  plaque            String      @unique @db.VarChar(20)
+  
+  /// Type de véhicule
+  typeVehicle       VehicleType @map("type_vehicle")
+  
+  /// Informations carte grise
+  carteGriseNumero  String?     @map("carte_grise_numero")
+  carteGriseScanUrl String?     @map("carte_grise_scan_url")
+  marque            String?
+  modele            String?
+  anneeFabrication  Int?        @map("annee_fabrication")
+  couleur           String?
+  nombrePlaces      Int?        @map("nombre_places")  /// Capacité passagers
+  
+  /// Propriétaire (polymorphique)
+  /// Soit un citoyen, soit une entreprise, soit une compagnie
+  proprietaireCitoyenId   String?     @map("proprietaire_citoyen_id")
+  proprietaireEntrepriseId String?    @map("proprietaire_entreprise_id")
+  proprietaireCompagnieId String?     @map("proprietaire_compagnie_id")
+  
+  /// Code PIN à 4 chiffres pour connexion (spécialement pour voitures particulières)
+  /// Le propriétaire se connecte avec plaque + ce code pour déclarer un trajet
+  codePin           String?     @map("code_pin") @db.VarChar(4)
+  
+  /// Documents additionnels
+  assuranceUrl      String?     @map("assurance_url")
+  visiteTechUrl     String?     @map("visite_technique_url")
+  
+  /// Statut
+  statut            VehicleStatus @default(ACTIF)
+  
+  /// Métadonnées
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  
+  /// Relations
+  proprietaireCitoyen     Citoyen?     @relation("VehicleOwner", fields: [proprietaireCitoyenId], references: [id])
+  proprietaireEntreprise  Entreprise?  @relation(fields: [proprietaireEntrepriseId], references: [id])
+  proprietaireCompagnie   Compagnie?   @relation(fields: [proprietaireCompagnieId], references: [id])
+  
+  /// Trajets effectués par ce véhicule
+  trajets           Trip[]
+  
+  /// Vérifications effectuées sur ce véhicule
+  verifications     Verification[]
+  
+  @@map("vehicles")
+}
+
+/// Statut d'un véhicule
+enum VehicleStatus {
+  ACTIF       /// Véhicule actif et autorisé
+  INACTIF     /// Véhicule temporairement inactif
+  SUSPENDU    /// Véhicule suspendu
+  VOLE        /// Véhicule signalé volé
+}
+
+// ============================================================================
+// GESTION DES POSTES DE CONTRÔLE
+// ============================================================================
+
+/// Poste de contrôle, péage, douane ou frontière
+/// Géré exclusivement par le Super Admin
+model Poste {
+  id            String   @id @default(uuid())
+  
+  /// Nom du poste
+  nom           String
+  
+  /// Type de poste
+  type          PostType
+  
+  /// Localisation GPS précise (anti-fraude)
+  latitude      Decimal  @db.Decimal(10, 8)
+  longitude     Decimal  @db.Decimal(11, 8)
+  
+  /// Adresse/Localisation
+  adresse       String?
+  ville         String
+  region        String
+  
+  /// Contact
+  telephone     String?
+  
+  /// Statut géré par le Super Admin
+  statut        PostStatus @default(ACTIF)
+  
+  /// Horaires d'ouverture (optionnel)
+  heureOuverture  String?  @map("heure_ouverture")  /// Format HH:MM
+  heureFermeture  String?  @map("heure_fermeture")
+  
+  /// Capacité/jour (estimation)
+  capaciteJournaliere Int? @map("capacite_journaliere")
+  
+  /// Métadonnées
+  createdBy     String   @map("created_by")  /// ID Super Admin créateur
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  
+  /// Relations
+  /// Agents actuellement assignés à ce poste
+  agents        Agent[]
+  
+  /// Passages enregistrés à ce poste
+  passages      Passage[]
+  
+  /// Anomalies signalées à ce poste
+  anomalies     Anomaly[]
+  
+  /// Vérifications effectuées à ce poste
+  verifications Verification[]
+  
+  @@map("postes")
+}
+
+/// Statut d'un poste
+enum PostStatus {
+  ACTIF       /// Poste opérationnel
+  INACTIF     /// Poste fermé temporairement
+  EN_TRAVAUX  /// Poste en maintenance/travaux
+}
+
+// ============================================================================
+// GESTION DES TRAJETS
+// ============================================================================
+
+/// Type de déclarant pour un trajet
+enum DeclarantType {
+  CITOYEN      /// Déclaré par un citoyen (voiture particulière)
+  ENTREPRISE   /// Déclaré par une entreprise de transport
+  COMPAGNIE    /// Déclaré par une compagnie de transport public
+}
+
+/// Trajet déclaré dans le système
+/// Peut être déclaré par un citoyen (voiture), une entreprise ou une compagnie
+model Trip {
+  id              String      @id @default(uuid())
+  
+  /// Numéro de référence unique du trajet (pour recherche)
+  reference       String      @unique @db.VarChar(20)
+  
+  /// Véhicule concerné
+  vehicleId       String      @map("vehicle_id")
+  
+  /// Déclarant (qui a créé le trajet)
+  declareParType  DeclarantType @map("declare_par_type")
+  declareParCitoyenId    String?  @map("declare_par_citoyen_id")
+  declareParEntrepriseId String?  @map("declare_par_entreprise_id")
+  declareParCompagnieId  String?  @map("declare_par_compagnie_id")
+  
+  /// Conducteur/Chauffeur (matricule citoyen pour entreprise/compagnie)
+  conducteurId    String?     @map("conducteur_id")
+  
+  /// Conducteur principal si différent du déclarant (pour voitures particulières)
+  driverId        String?     @map("driver_id")
+  
+  /// Itinéraire
+  pointDepart     String      @map("point_depart")
+  destination     String
+  
+  /// Coordonnées GPS
+  departLat       Decimal?    @map("depart_lat") @db.Decimal(10, 8)
+  departLng       Decimal?    @map("depart_lng") @db.Decimal(11, 8)
+  destinationLat  Decimal?    @map("destination_lat") @db.Decimal(10, 8)
+  destinationLng  Decimal?    @map("destination_lng") @db.Decimal(11, 8)
+  
+  /// Dates
+  dateDepart      DateTime    @map("date_depart")
+  dateArriveeEstimee DateTime? @map("date_arrivee_estimee")
+  dateArriveeReelle DateTime? @map("date_arrivee_reelle")
+  
+  /// Pour les trajets entreprise : informations marchandise
+  typeMarchandise String?     @map("type_marchandise")
+  poidsMarchandise Decimal?   @map("poids_marchandise")
+  valeurMarchandise Decimal?  @map("valeur_marchandise")
+  
+  /// Documents joints (URLs séparées par virgule ou JSON)
+  documentsUrls   String?     @map("documents_urls")
+  
+  /// Statut du trajet
+  statut          TripStatus  @default(EN_PREPARATION)
+  
+  /// Notes
+  notes           String?
+  
+  /// Métadonnées
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  
+  /// Relations
+  vehicle         Vehicle     @relation(fields: [vehicleId], references: [id])
+  
+  declareParCitoyen    Citoyen?    @relation("TripDeclarantCitoyen", fields: [declareParCitoyenId], references: [id])
+  declareParEntreprise Entreprise? @relation("TripDeclarantEntreprise", fields: [declareParEntrepriseId], references: [id])
+  declareParCompagnie  Compagnie?  @relation("TripDeclarantCompagnie", fields: [declareParCompagnieId], references: [id])
+  
+  conducteur      Citoyen?    @relation("TripChauffeur", fields: [conducteurId], references: [id])
+  
+  /// Conducteur principal si différent du déclarant (pour voitures particulières)
+  driver          Citoyen?    @relation("TripDriver", fields: [driverId], references: [id])
+  
+  /// Passagers du trajet (relation many-to-many via table de jointure)
+  passagers       PassagerTrip[]
+  
+  /// Timeline des passages aux postes
+  passages        Passage[]
+  
+  /// Anomalies liées à ce trajet
+  anomalies       Anomaly[]
+  
+  /// Vérifications effectuées
+  verifications   Verification[]
+  
+  @@map("trips")
+}
+
+/// Table de jointure pour les passagers d'un trajet
+/// Permet de lier plusieurs citoyens (par leur matricule) à un trajet
+model PassagerTrip {
+  id          String   @id @default(uuid())
+  tripId      String   @map("trip_id")
+  citoyenId   String   @map("citoyen_id")  /// Référence vers le citoyen passager
+  
+  /// Informations au moment du trajet (snapshot)
+  matricule   String   @db.VarChar(5)  /// Matricule au moment du trajet
+  nom         String
+  prenom      String
+  telephone   String
+  typePersonne TypePersonne @map("type_personne")
+  
+  /// Position dans le véhicule (optionnel)
+  siegeNumero Int?     @map("siege_numero")
+  
+  /// Date d'ajout
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  /// Relations
+  trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  citoyen     Citoyen  @relation(fields: [citoyenId], references: [id])
+  
+  @@unique([tripId, citoyenId])
+  @@map("passager_trips")
+}
+
+// ============================================================================
+// GESTION DES PASSAGES AUX POSTES (COEUR DU SYSTÈME)
+// ============================================================================
+
+/// Passage d'un véhicule à un poste de contrôle
+/// C'est l'événement central qui alimente la timeline des trajets
+model Passage {
+  id                String   @id @default(uuid())
+  
+  /// Trajet concerné
+  tripId            String   @map("trip_id")
+  
+  /// Poste où le passage a lieu
+  posteId           String   @map("poste_id")
+  
+  /// Agent qui valide le passage
+  agentId           String   @map("agent_id")
+  
+  /// Timestamp exact du passage (anti-fraude)
+  timestampPassage  DateTime @default(now()) @map("timestamp_passage")
+  
+  /// GPS réel de l'agent au moment du passage (anti-fraude)
+  agentLatitude     Decimal  @map("agent_latitude") @db.Decimal(10, 8)
+  agentLongitude    Decimal  @map("agent_longitude") @db.Decimal(11, 8)
+  
+  /// Précision GPS en mètres
+  gpsPrecision      Decimal? @map("gps_precision") @db.Decimal(6, 2)
+  
+  /// Distance calculée entre l'agent et le poste (pour détecter les fraudes)
+  distancePoste     Decimal? @map("distance_poste") @db.Decimal(8, 2)  /// en mètres
+  
+  /// Statut du passage
+  statut            PassageStatus @default(EN_ATTENTE)
+  
+  /// Durée de traitement (secondes)
+  dureeTraitement   Int?     @map("duree_traitement")
+  
+  /// Observations
+  observations      String?
+  
+  /// Documents scannés lors du passage
+  scanDocuments     String?  @map("scan_documents")  /// URLs séparées par virgule
+  
+  /// Métadonnées
+  createdAt         DateTime @default(now()) @map("created_at")
+  
+  /// Relations
+  trip              Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  poste             Poste    @relation(fields: [posteId], references: [id])
+  agent             Agent    @relation(fields: [agentId], references: [id])
+  
+  @@index([tripId, timestampPassage])
+  @@index([posteId, timestampPassage])
+  @@map("passages")
+}
+
+// ============================================================================
+// GESTION DES ANOMALIES ET VÉRIFICATIONS
+// ============================================================================
+
+/// Anomalie signalée par un agent lors d'un contrôle
+model Anomaly {
+  id              String   @id @default(uuid())
+  
+  /// Trajet concerné (si applicable)
+  tripId          String?  @map("trip_id")
+  
+  /// Véhicule concerné (si connu)
+  vehicleId       String?  @map("vehicle_id")
+  
+  /// Poste où l'anomalie a été signalée
+  posteId         String   @map("poste_id")
+  
+  /// Agent qui a signalé
+  agentId         String   @map("agent_id")
+  
+  /// Type d'anomalie
+  type            AnomalyType
+  
+  /// Description détaillée
+  description     String   @db.Text
+  
+  /// Sévérité
+  severite        SeveriteAnomalie @default(MOYENNE)
+  
+  /// Preuves (photos/documents)
+  preuvesUrls     String?  @map("preuves_urls")  /// URLs séparées par virgule
+  
+  /// Statut de traitement
+  statut          StatutAnomalie @default(EN_ATTENTE)
+  
+  /// Résolution
+  traitePar       String?  @map("traite_par")  /// ID Super Admin
+  dateTraitement  DateTime? @map("date_traitement")
+  notesResolution String?   @map("notes_resolution") @db.Text
+  
+  /// GPS
+  latitude        Decimal? @db.Decimal(10, 8)
+  longitude       Decimal? @db.Decimal(11, 8)
+  
+  /// Métadonnées
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  /// Relations
+  trip            Trip?    @relation(fields: [tripId], references: [id])
+  poste           Poste    @relation(fields: [posteId], references: [id])
+  agentSignale    Agent    @relation(fields: [agentId], references: [id])
+  
+  @@map("anomalies")
+}
+
+/// Sévérité d'une anomalie
+enum SeveriteAnomalie {
+  FAIBLE      /// Anomalie mineure
+  MOYENNE     /// Anomalie modérée
+  GRAVE       /// Anomalie grave
+  CRITIQUE    /// Anomalie critique (menace sécurité)
+}
+
+/// Statut de traitement d'une anomalie
+enum StatutAnomalie {
+  EN_ATTENTE    /// Signalée, en attente de traitement
+  EN_COURS      /// Traitement en cours
+  RESOLUE       /// Résolue
+  REJETEE       /// Rejetée (fausse alerte)
+}
+
+/// Vérification terrain effectuée par un agent
+/// Différent d'un passage : c'est une inspection approfondie
+model Verification {
+  id              String   @id @default(uuid())
+  
+  /// Trajet vérifié (si applicable)
+  tripId          String?  @map("trip_id")
+  
+  /// Véhicule vérifié
+  vehicleId       String?  @map("vehicle_id")
+  
+  /// Poste où la vérification a lieu
+  posteId         String   @map("poste_id")
+  
+  /// Agent qui effectue la vérification
+  agentId         String   @map("agent_id")
+  
+  /// Résultat
+  resultat        VerificationResult
+  
+  /// Type d'anomalie si résultat = ANOMALIE
+  typeAnomalie    AnomalyType? @map("type_anomalie")
+  
+  /// Détails de la vérification
+  details         String?  @db.Text
+  
+  /// Nombre de passagers trouvés vs déclarés
+  passagersDeclares   Int? @map("passagers_declares")
+  passagersTrouves    Int? @map("passagers_trouves")
+  
+  /// Documents vérifiés
+  documentsOk     Boolean? @map("documents_ok")
+  plaqueOk        Boolean? @map("plaque_ok")
+  
+  /// Preuves (photos)
+  photosUrls      String?  @map("photos_urls")
+  
+  /// GPS
+  latitude        Decimal  @db.Decimal(10, 8)
+  longitude       Decimal  @db.Decimal(11, 8)
+  
+  /// Date de la vérification
+  dateVerification DateTime @default(now()) @map("date_verification")
+  
+  /// Relations
+  trip            Trip?    @relation(fields: [tripId], references: [id])
+  vehicle         Vehicle? @relation(fields: [vehicleId], references: [id])
+  poste           Poste    @relation(fields: [posteId], references: [id])
+  agent           Agent    @relation(fields: [agentId], references: [id])
+  
+  @@map("verifications")
+}
+
+// ============================================================================
+// AUDIT TRAIL IMMUTABLE (OBLIGATOIRE)
+// ============================================================================
+
+/// Journal d'audit immuable - Trace toutes les actions importantes du système
+/// Ce modèle est CRITIQUE pour la traçabilité et la sécurité
+/// AUCUNE MODIFICATION NI SUPPRESSION n'est autorisée après création
+model AuditLog {
+  id              String   @id @default(uuid())
+  
+  /// Utilisateur qui a effectué l'action
+  userId          String   @map("user_id")
+  
+  /// Type d'action effectuée
+  actionType      AuditActionType @map("action_type")
+  
+  /// Entité concernée (table/modèle)
+  entityType      String   @map("entity_type")  /// Ex: "Trip", "Vehicle", "Passage"
+  
+  /// ID de l'entité concernée
+  entityId        String?  @map("entity_id")
+  
+  /// Description lisible de l'action
+  description     String   @db.Text
+  
+  /// Données avant modification (JSON)
+  oldData         String?  @map("old_data") @db.Text
+  
+  /// Données après modification (JSON)
+  newData         String?  @map("new_data") @db.Text
+  
+  /// Contexte de l'action
+  ipAddress       String?  @map("ip_address")
+  userAgent       String?  @map("user_agent")
+  
+  /// Localisation GPS si applicable
+  latitude        Decimal? @db.Decimal(10, 8)
+  longitude       Decimal? @db.Decimal(11, 8)
+  
+  /// Poste concerné (si action effectuée depuis un poste)
+  posteId         String?  @map("poste_id")
+  
+  /// Session utilisateur
+  sessionId       String?  @map("session_id")
+  
+  /// Timestamp immuable
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  /// Relations
+  user            User     @relation(fields: [userId], references: [id])
+  
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actionType, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// STATISTIQUES ET TABLEAU DE BORD (AGGRÉGATIONS)
+// ============================================================================
+
+/// Statistiques journalières par poste (pré-calculées pour performance)
+/// Mise à jour par un job quotidien
+model DailyPostStats {
+  id              String   @id @default(uuid())
+  
+  /// Poste concerné
+  posteId         String   @map("poste_id")
+  
+  /// Date des statistiques
+  date            DateTime @db.Date
+  
+  /// Nombre total de passages
+  totalPassages   Int      @default(0) @map("total_passages")
+  
+  /// Passages par statut
+  passagesValides Int      @default(0) @map("passages_valides")
+  passagesAnomalie Int     @default(0) @map("passages_anomalie")
+  passagesRefuses Int      @default(0) @map("passages_refuses")
+  
+  /// Nombre d'anomalies signalées
+  totalAnomalies  Int      @default(0) @map("total_anomalies")
+  anomaliesCritiques Int   @default(0) @map("anomalies_critiques")
+  
+  /// Temps de traitement moyen (secondes)
+  tempsTraitementMoyen Int? @map("temps_traitement_moyen")
+  
+  /// Nombre d'agents actifs ce jour
+  agentsActifs    Int      @default(0) @map("agents_actifs")
+  
+  /// Véhicules par type
+  voituresCount   Int      @default(0) @map("voitures_count")
+  camionsCount    Int      @default(0) @map("camions_count")
+  busCount        Int      @default(0) @map("bus_count")
+  
+  /// Métadonnées
+  calculatedAt    DateTime @default(now()) @map("calculated_at")
+  
+  @@unique([posteId, date])
+  @@index([date])
+  @@map("daily_post_stats")
+}
+
+/// Statistiques journalières globales (niveau national)
+model DailyNationalStats {
+  id                  String   @id @default(uuid())
+  
+  /// Date des statistiques
+  date                DateTime @unique @db.Date
+  
+  /// Totaux nationaux
+  totalTrajets        Int      @default(0) @map("total_trajets")
+  totalPassages       Int      @default(0) @map("total_passages")
+  totalAnomalies      Int      @default(0) @map("total_anomalies")
+  
+  /// Par type de véhicule
+  trajetsVoitures     Int      @default(0) @map("trajets_voitures")
+  trajetsCamions      Int      @default(0) @map("trajets_camions")
+  trajetsBus          Int      @default(0) @map("trajets_bus")
+  
+  /// Par type de poste
+  passagesControle    Int      @default(0) @map("passages_controle")
+  passagesPeage       Int      @default(0) @map("passages_peage")
+  passagesDouane      Int      @default(0) @map("passages_douane")
+  
+  /// Nouveaux enregistrements
+  nouveauxCitoyens    Int      @default(0) @map("nouveaux_citoyens")
+  nouveauxVehicules   Int      @default(0) @map("nouveaux_vehicules")
+  
+  /// Calculées à
+  calculatedAt        DateTime @default(now()) @map("calculated_at")
+  
+  @@index([date])
+  @@map("daily_national_stats")
+}
+
+/// Performance des agents (pour évaluation et reporting)
+model AgentPerformance {
+  id                  String   @id @default(uuid())
+  
+  /// Agent concerné
+  agentId             String   @map("agent_id")
+  
+  /// Période
+  year                Int
+  month               Int
+  
+  /// Métriques
+  totalPassages       Int      @default(0) @map("total_passages")
+  passagesValides     Int      @default(0) @map("passages_valides")
+  
+  /// Anomalies
+  anomaliesDetectees  Int      @default(0) @map("anomalies_detectees")
+  
+  /// Temps moyen de traitement (secondes)
+  tempsTraitementMoyen Int?    @map("temps_traitement_moyen")
+  
+  /// Postes où l'agent a travaillé
+  postesCount         Int      @default(0) @map("postes_count")
+  
+  /// Jours de présence
+  joursPresence       Int      @default(0) @map("jours_presence")
+  
+  /// Score global (0-100) calculé selon formule métier
+  scorePerformance    Int?     @map("score_performance")
+  
+  /// Métadonnées
+  calculatedAt        DateTime @default(now()) @map("calculated_at")
+  
+  @@unique([agentId, year, month])
+  @@index([year, month])
+  @@map("agent_performance")
+}
+
+// ============================================================================
+// SYNCHRONISATION OFFLINE (POUR MODE DÉCONNECTÉ)
+// ============================================================================
+
+/// File d'attente pour synchronisation des données en mode offline
+/// Les agents en zone sans connexion stockent ici leurs actions
+model OfflineQueue {
+  id              String   @id @default(uuid())
+  
+  /// Agent qui a créé l'entrée
+  agentId         String   @map("agent_id")
+  
+  /// Type d'action à synchroniser
+  actionType      String   @map("action_type")  /// "PASSAGE", "ANOMALIE", "VERIFICATION"
+  
+  /// Données JSON de l'action
+  payload         String   @db.Text
+  
+  /// Timestamp local de l'action
+  localTimestamp  DateTime @map("local_timestamp")
+  
+  /// GPS local
+  latitude        Decimal  @db.Decimal(10, 8)
+  longitude       Decimal  @db.Decimal(11, 8)
+  
+  /// Statut de synchronisation
+  statut          OfflineStatus @default(EN_ATTENTE)
+  
+  /// Nombre de tentatives
+  tentatives      Int      @default(0)
+  
+  /// Message d'erreur si échec
+  erreurMessage   String?  @map("erreur_message")
+  
+  /// Date de création locale
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  /// Date de synchronisation
+  syncedAt        DateTime? @map("synced_at")
+  
+  /// ID de l'entité créée après sync
+  syncedEntityId  String?  @map("synced_entity_id")
+  
+  @@index([agentId, statut])
+  @@index([statut, tentatives])
+  @@map("offline_queue")
+}
+
+/// Statut de synchronisation offline
+enum OfflineStatus {
+  EN_ATTENTE    /// En attente de synchronisation
+  EN_COURS      /// Synchronisation en cours
+  SYNCHRONISE   /// Synchronisé avec succès
+  ERREUR        /// Erreur de synchronisation
+}
+
+// ============================================================================
+// CONFIGURATION SYSTÈME (PARAMÈTRES GLOBAUX)
+// ============================================================================
+
+/// Paramètres de configuration du système
+/// Modifiables uniquement par le Super Admin
+model SystemConfig {
+  id              String   @id @default(uuid())
+  
+  /// Clé du paramètre
+  cle             String   @unique
+  
+  /// Valeur
+  valeur          String   @db.Text
+  
+  /// Type de donnée
+  type            ConfigType @default(STRING)
+  
+  /// Description
+  description     String?
+  
+  /// Modifié par
+  updatedBy       String   @map("updated_by")
+  
+  /// Dates
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  @@map("system_config")
+}
+
+/// Type de configuration
+enum ConfigType {
+  STRING    /// Chaîne de caractères
+  NUMBER    /// Nombre
+  BOOLEAN   /// Booléen
+  JSON      /// Objet JSON
+  DATE      /// Date
+}
+
+// ============================================================================
+// INDEXES ET OPTIMISATIONS
+// ============================================================================
+
+/// Vue matérialisée pour recherche rapide (à créer via migration SQL)
+/// Cette table est gérée manuellement pour optimiser les recherches
+model SearchIndex {
+  id              String   @id @default(uuid())
+  
+  /// Type d'entité
+  entityType      String   @map("entity_type")  /// "CITOYEN", "VEHICLE", "TRIP"
+  
+  /// ID de l'entité
+  entityId        String   @map("entity_id")
+  
+  /// Texte de recherche (concaténation des champs pertinents)
+  searchText      String   @map("search_text") @db.Text
+  
+  /// Champs spécifiques pour filtres rapides
+  matricule       String?  @db.VarChar(5)
+  plaque          String?  @db.VarChar(20)
+  telephone       String?
+  
+  /// Date de l'entité
+  entityDate      DateTime @map("entity_date")
+  
+  /// Mise à jour
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  @@index([searchText])
+  @@index([matricule])
+  @@index([plaque])
+  @@index([telephone])
+  @@index([entityType, entityDate])
+  @@map("search_index")
+}

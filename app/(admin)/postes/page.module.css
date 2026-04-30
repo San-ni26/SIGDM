@@ -1,0 +1,58 @@
+/* Styles pour Leaflet */
+@import url('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  border-radius: 0.5rem;
+  z-index: 1;
+}
+
+/* Custom marker styles */
+.custom-marker {
+  background: transparent;
+  border: none;
+}
+
+.marker-pin {
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 0;
+  position: absolute;
+  transform: rotate(-45deg);
+  left: 50%;
+  top: 50%;
+  margin: -15px 0 0 -15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+
+.marker-pin::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  margin: 8px 0 0 8px;
+  background: white;
+  position: absolute;
+  border-radius: 50%;
+}
+
+/* Type colors */
+.marker-controle { background: #3b82f6; }
+.marker-peage { background: #10b981; }
+.marker-douane { background: #f59e0b; }
+.marker-frontiere { background: #ef4444; }
+
+/* Popup styles */
+.leaflet-popup-content-wrapper {
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.leaflet-popup-content {
+  margin: 0;
+  padding: 12px;
+}
