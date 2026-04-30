@@ -2,7 +2,7 @@
  * ============================================================================
  * ONGLET POSTES DE CONTRÔLE - VERSION RESPONSIVE
  * ============================================================================
- * Gestion complète des postes avec carte interactive optimisée
+ * Gestion complète des postes avec carte interactive optimisée et Drawer détaillé
  */
 
 'use client';
@@ -24,6 +24,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Menu,
+  Activity,
+  Users,
+  AlertTriangle,
+  Info,
+  Clock,
+  User,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 
 // Import dynamique de la carte
@@ -57,7 +65,51 @@ interface Poste {
   _count?: {
     agents: number;
     passages: number;
+    anomalies?: number;
   };
+}
+
+interface Agent {
+  id: string;
+  nom: string;
+  prenom: string;
+  matriculeAgent: string;
+  typeAgent: string;
+  telephone: string;
+  photoUrl: string | null;
+  grade: string | null;
+}
+
+interface Passage {
+  id: string;
+  timestampPassage: string;
+  statut: string;
+  agent: { nom: string; prenom: string };
+  trip: {
+    reference: string;
+    pointDepart: string;
+    destination: string;
+    vehicle: { plaque: string; typeVehicle: string };
+  };
+}
+
+interface Anomaly {
+  id: string;
+  type: string;
+  description: string;
+  severite: string;
+  createdAt: string;
+  agentSignale: { nom: string; prenom: string };
+  trip?: {
+    reference: string;
+    vehicle: { plaque: string };
+  } | null;
+}
+
+interface PosteDetail extends Poste {
+  agents: Agent[];
+  passages: Passage[];
+  anomalies: Anomaly[];
 }
 
 interface FormData {
@@ -84,12 +136,24 @@ const STATUT_COLORS = {
   EN_TRAVAUX: 'bg-yellow-100 text-yellow-800 border-yellow-200',
 };
 
+const SEVERITE_COLORS: Record<string, string> = {
+  FAIBLE: 'bg-blue-100 text-blue-800',
+  MOYENNE: 'bg-yellow-100 text-yellow-800',
+  ELEVEE: 'bg-orange-100 text-orange-800',
+  CRITIQUE: 'bg-red-100 text-red-800',
+};
+
 export default function PostesTab() {
   const [postes, setPostes] = useState<Poste[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('');
+  
   const [selectedPoste, setSelectedPoste] = useState<Poste | null>(null);
+  const [posteDetails, setPosteDetails] = useState<PosteDetail | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [activeDrawerTab, setActiveDrawerTab] = useState<'apercu' | 'agents' | 'controles' | 'anomalies'>('apercu');
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([12.6392, -8.0029]);
@@ -118,7 +182,6 @@ export default function PostesTab() {
       const response = await fetch(`/api/admin/postes?${params}`);
       
       if (response.status === 401) {
-        // Rediriger vers la page de login si non authentifié
         window.location.href = '/login';
         return;
       }
@@ -146,6 +209,30 @@ export default function PostesTab() {
   useEffect(() => {
     loadPostes();
   }, [loadPostes]);
+
+  // Load details when a poste is selected
+  useEffect(() => {
+    const fetchPosteDetails = async (id: string) => {
+      setLoadingDetails(true);
+      setPosteDetails(null);
+      try {
+        const response = await fetch(`/api/admin/postes/${id}`);
+        if (!response.ok) throw new Error('Erreur de chargement des détails');
+        const result = await response.json();
+        setPosteDetails(result.data);
+      } catch (error) {
+        console.error('Erreur détails:', error);
+      } finally {
+        setLoadingDetails(false);
+      }
+    };
+
+    if (selectedPoste) {
+      fetchPosteDetails(selectedPoste.id);
+    } else {
+      setPosteDetails(null);
+    }
+  }, [selectedPoste]);
 
   const filteredPostes = postes.filter(poste => {
     const matchesSearch = 
@@ -175,7 +262,6 @@ export default function PostesTab() {
 
   const handleEdit = (poste: Poste) => {
     setIsEditing(true);
-    setSelectedPoste(poste);
     setFormData({
       nom: poste.nom,
       type: poste.type,
@@ -262,6 +348,9 @@ export default function PostesTab() {
       
       await loadPostes();
       setIsModalOpen(false);
+      if (!isEditing && selectedPoste) {
+         setSelectedPoste(null);
+      }
       setMapCenter([parseFloat(formData.latitude), parseFloat(formData.longitude)]);
       
     } catch (error: any) {
@@ -294,14 +383,15 @@ export default function PostesTab() {
 
   const handleMapMarkerClick = (poste: Poste) => {
     setSelectedPoste(poste);
+    setActiveDrawerTab('apercu'); // Reset tab
     const element = document.getElementById(`poste-${poste.id}`);
     element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col relative overflow-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-white border-b border-gray-200">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-white border-b border-gray-200 shrink-0 z-10">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setShowSidebar(!showSidebar)}
@@ -345,10 +435,10 @@ export default function PostesTab() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar */}
-        <div className={`${showSidebar ? 'w-80' : 'w-0'} transition-all duration-300 bg-white border-r border-gray-200 flex flex-col overflow-hidden`}>
-          <div className="p-3 border-b border-gray-200 bg-gray-50">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Sidebar Liste Postes */}
+        <div className={`${showSidebar ? 'w-80' : 'w-0'} transition-all duration-300 bg-white border-r border-gray-200 flex flex-col shrink-0 z-10`}>
+          <div className="p-3 border-b border-gray-200 bg-gray-50 shrink-0">
             <p className="text-sm font-medium text-gray-700">
               {filteredPostes.length} poste{filteredPostes.length > 1 ? 's' : ''}
             </p>
@@ -376,11 +466,7 @@ export default function PostesTab() {
                     <div
                       key={poste.id}
                       id={`poste-${poste.id}`}
-                      onClick={() => {
-                        setSelectedPoste(poste);
-                        setMapCenter([parseFloat(poste.latitude), parseFloat(poste.longitude)]);
-                        setMapZoom(15);
-                      }}
+                      onClick={() => handleMapMarkerClick(poste)}
                       className={`p-3 cursor-pointer transition-all ${
                         isSelected 
                           ? 'bg-blue-50 border-l-4 border-blue-500' 
@@ -431,7 +517,7 @@ export default function PostesTab() {
         </div>
 
         {/* Map */}
-        <div className="flex-1 relative bg-gray-100">
+        <div className="flex-1 relative bg-gray-100 min-w-0">
           <MapComponent
             postes={filteredPostes}
             selectedPoste={selectedPoste}
@@ -440,54 +526,293 @@ export default function PostesTab() {
             onMarkerClick={handleMapMarkerClick}
           />
           
-          {/* Overlay info */}
-          {selectedPoste && (
-            <div className="absolute bottom-4 left-4 right-4 sm:right-auto sm:max-w-md bg-white rounded-xl shadow-lg p-4 z-[1000] border border-gray-200">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`w-3 h-3 rounded-full ${POSTE_TYPES[selectedPoste.type].color}`} />
-                    <h3 className="font-semibold text-gray-900 truncate">{selectedPoste.nom}</h3>
-                  </div>
-                  <p className="text-sm text-gray-600">
-                    {selectedPoste.adresse || selectedPoste.ville}, {selectedPoste.region}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <MapPin className="w-3.5 h-3.5" />
-                      {parseFloat(selectedPoste.latitude).toFixed(5)}, {parseFloat(selectedPoste.longitude).toFixed(5)}
-                    </span>
-                    {selectedPoste.telephone && (
-                      <span>📞 {selectedPoste.telephone}</span>
-                    )}
-                  </div>
-                </div>
-                
-                <button 
-                  onClick={() => setSelectedPoste(null)} 
-                  className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <X className="w-5 h-5 text-gray-400" />
-                </button>
-              </div>
-            </div>
-          )}
-          
           {/* Bouton toggle sidebar (mobile) */}
           <button
             onClick={() => setShowSidebar(!showSidebar)}
-            className="absolute top-4 left-4 z-[1000] lg:hidden bg-white p-2 rounded-lg shadow-md border border-gray-200"
+            className="absolute top-4 left-4 z-[500] lg:hidden bg-white p-2 rounded-lg shadow-md border border-gray-200"
           >
             {showSidebar ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
+
+        {/* Drawer pour le détail du poste sélectionné */}
+        <div 
+          className={`absolute top-0 right-0 h-full w-full sm:w-[400px] md:w-[450px] bg-white shadow-2xl border-l border-gray-200 transform transition-transform duration-300 ease-in-out z-[600] flex flex-col ${
+            selectedPoste ? 'translate-x-0' : 'translate-x-full'
+          }`}
+        >
+          {selectedPoste && (
+            <>
+              {/* Drawer Header */}
+              <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex-shrink-0">
+                <div className="flex justify-between items-start mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-12 h-12 rounded-xl ${POSTE_TYPES[selectedPoste.type].color} flex items-center justify-center shadow-sm`}>
+                      {(() => {
+                        const Icon = POSTE_TYPES[selectedPoste.type].icon;
+                        return <Icon className="w-6 h-6 text-white" />;
+                      })()}
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-gray-900 leading-tight">{selectedPoste.nom}</h2>
+                      <span className={`inline-block mt-1 px-2 py-0.5 text-xs rounded-full border ${STATUT_COLORS[selectedPoste.statut]}`}>
+                        {selectedPoste.statut}
+                      </span>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedPoste(null)}
+                    className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Onglets du Drawer */}
+                <div className="flex space-x-1 bg-gray-200/50 p-1 rounded-lg mt-4">
+                  {[
+                    { id: 'apercu', label: 'Aperçu', icon: Info },
+                    { id: 'agents', label: 'Agents', icon: Users, count: posteDetails?._count?.agents },
+                    { id: 'controles', label: 'Contrôles', icon: Activity, count: posteDetails?._count?.passages },
+                    { id: 'anomalies', label: 'Anomalies', icon: AlertTriangle, count: posteDetails?._count?.anomalies }
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveDrawerTab(tab.id as any)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-1.5 px-2 text-xs font-medium rounded-md transition-all ${
+                        activeDrawerTab === tab.id
+                          ? 'bg-white text-blue-600 shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+                      }`}
+                    >
+                      <tab.icon className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">{tab.label}</span>
+                      {tab.count !== undefined && (
+                        <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] ${
+                          activeDrawerTab === tab.id ? 'bg-blue-100 text-blue-700' : 'bg-gray-300 text-gray-700'
+                        }`}>
+                          {tab.count}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Drawer Content */}
+              <div className="flex-1 overflow-y-auto bg-white p-6">
+                {loadingDetails ? (
+                  <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                    <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-3" />
+                    Chargement des détails...
+                  </div>
+                ) : posteDetails ? (
+                  <div className="space-y-6">
+                    {/* ONGLET: APERÇU */}
+                    {activeDrawerTab === 'apercu' && (
+                      <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wider">Localisation</h3>
+                          <div className="bg-gray-50 p-4 rounded-xl space-y-3 text-sm">
+                            <div className="flex items-start gap-3">
+                              <MapPin className="w-5 h-5 text-gray-400 mt-0.5" />
+                              <div>
+                                <p className="font-medium text-gray-900">{posteDetails.ville}, {posteDetails.region}</p>
+                                {posteDetails.adresse && <p className="text-gray-500 mt-1">{posteDetails.adresse}</p>}
+                                <p className="text-gray-400 text-xs mt-1 font-mono">
+                                  {parseFloat(posteDetails.latitude).toFixed(5)}, {parseFloat(posteDetails.longitude).toFixed(5)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {posteDetails.telephone && (
+                          <div>
+                            <h3 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wider">Contact</h3>
+                            <div className="bg-gray-50 p-4 rounded-xl text-sm font-medium text-gray-900">
+                              📞 {posteDetails.telephone}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                            <div className="flex items-center gap-2 text-blue-600 mb-2">
+                              <Users className="w-5 h-5" />
+                              <span className="font-semibold">Agents</span>
+                            </div>
+                            <p className="text-2xl font-bold text-blue-900">{posteDetails._count?.agents || 0}</p>
+                          </div>
+                          <div className="bg-green-50 p-4 rounded-xl border border-green-100">
+                            <div className="flex items-center gap-2 text-green-600 mb-2">
+                              <Activity className="w-5 h-5" />
+                              <span className="font-semibold">Passages</span>
+                            </div>
+                            <p className="text-2xl font-bold text-green-900">{posteDetails._count?.passages || 0}</p>
+                          </div>
+                        </div>
+                        
+                        <button
+                          onClick={() => handleEdit(posteDetails)}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50 font-medium transition-colors"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                          Modifier les informations
+                        </button>
+                      </div>
+                    )}
+
+                    {/* ONGLET: AGENTS */}
+                    {activeDrawerTab === 'agents' && (
+                      <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                        {posteDetails.agents.length === 0 ? (
+                          <div className="text-center py-10 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                            <Users className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                            <p className="text-gray-500 font-medium">Aucun agent affecté à ce poste</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {posteDetails.agents.map(agent => (
+                              <div key={agent.id} className="flex items-center gap-4 p-3 bg-white border border-gray-200 rounded-xl hover:shadow-md transition-shadow">
+                                <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-lg shrink-0">
+                                  {agent.prenom[0]}{agent.nom[0]}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-semibold text-gray-900 truncate">{agent.prenom} {agent.nom}</p>
+                                  <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                                    <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{agent.matriculeAgent}</span>
+                                    {agent.grade && <span>• {agent.grade}</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ONGLET: CONTRÔLES */}
+                    {activeDrawerTab === 'controles' && (
+                      <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-sm font-semibold text-gray-900">50 derniers contrôles</h3>
+                        </div>
+                        {posteDetails.passages.length === 0 ? (
+                          <div className="text-center py-10 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                            <Activity className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                            <p className="text-gray-500 font-medium">Aucun contrôle récent</p>
+                          </div>
+                        ) : (
+                          <div className="relative border-l-2 border-gray-200 ml-3 space-y-6 pb-4">
+                            {posteDetails.passages.map((passage) => (
+                              <div key={passage.id} className="relative pl-6">
+                                <span className={`absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white ${
+                                  passage.statut === 'VALIDE' ? 'bg-green-500' :
+                                  passage.statut === 'ANOMALIE' ? 'bg-yellow-500' :
+                                  passage.statut === 'REFUSE' ? 'bg-red-500' : 'bg-gray-400'
+                                }`} />
+                                <div className="bg-white border border-gray-100 shadow-sm rounded-xl p-3 hover:shadow-md transition-shadow">
+                                  <div className="flex justify-between items-start mb-2">
+                                    <span className="text-xs font-medium text-gray-500 flex items-center gap-1">
+                                      <Clock className="w-3 h-3" />
+                                      {new Date(passage.timestampPassage).toLocaleString('fr-FR', { 
+                                        day: '2-digit', month: '2-digit', hour: '2-digit', minute:'2-digit' 
+                                      })}
+                                    </span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                                      passage.statut === 'VALIDE' ? 'bg-green-100 text-green-700' :
+                                      passage.statut === 'ANOMALIE' ? 'bg-yellow-100 text-yellow-700' :
+                                      passage.statut === 'REFUSE' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'
+                                    }`}>
+                                      {passage.statut}
+                                    </span>
+                                  </div>
+                                  <p className="font-semibold text-gray-900 text-sm mb-1">
+                                    Véhicule: {passage.trip.vehicle.plaque} <span className="text-gray-400 text-xs font-normal">({passage.trip.vehicle.typeVehicle})</span>
+                                  </p>
+                                  <p className="text-xs text-gray-600 mb-2 truncate">
+                                    {passage.trip.pointDepart} ➔ {passage.trip.destination}
+                                  </p>
+                                  <div className="flex items-center gap-1.5 text-xs text-gray-500 bg-gray-50 p-1.5 rounded-lg border border-gray-100">
+                                    <User className="w-3.5 h-3.5" />
+                                    <span>Contrôlé par <b>{passage.agent.prenom} {passage.agent.nom}</b></span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ONGLET: ANOMALIES */}
+                    {activeDrawerTab === 'anomalies' && (
+                      <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                        {posteDetails.anomalies.length === 0 ? (
+                          <div className="text-center py-10 bg-green-50 rounded-xl border border-dashed border-green-200">
+                            <CheckCircle2 className="w-10 h-10 text-green-400 mx-auto mb-3" />
+                            <p className="text-green-700 font-medium">Aucune anomalie récente</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {posteDetails.anomalies.map((anomalie) => (
+                              <div key={anomalie.id} className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow">
+                                <div className="flex justify-between items-start mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <AlertCircle className={`w-5 h-5 ${
+                                      anomalie.severite === 'CRITIQUE' ? 'text-red-500' :
+                                      anomalie.severite === 'ELEVEE' ? 'text-orange-500' :
+                                      anomalie.severite === 'MOYENNE' ? 'text-yellow-500' : 'text-blue-500'
+                                    }`} />
+                                    <span className="font-bold text-gray-900 text-sm">{anomalie.type.replace(/_/g, ' ')}</span>
+                                  </div>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${SEVERITE_COLORS[anomalie.severite] || 'bg-gray-100 text-gray-800'}`}>
+                                    {anomalie.severite}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-gray-600 mb-3 bg-gray-50 p-2 rounded border border-gray-100">
+                                  {anomalie.description}
+                                </p>
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3.5 h-3.5" />
+                                    {new Date(anomalie.createdAt).toLocaleDateString('fr-FR')}
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <User className="w-3.5 h-3.5" />
+                                    {anomalie.agentSignale.prenom} {anomalie.agentSignale.nom}
+                                  </span>
+                                  {anomalie.trip && (
+                                    <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">
+                                      Plaque: {anomalie.trip.vehicle.plaque}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                    <AlertCircle className="w-8 h-8 mb-2 opacity-50" />
+                    <p>Impossible de charger les détails</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Modal */}
+      {/* Modal Création / Édition */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
               <h2 className="text-xl font-semibold text-gray-900">
                 {isEditing ? 'Modifier le poste' : 'Nouveau poste'}
               </h2>
@@ -527,10 +852,10 @@ export default function PostesTab() {
                       className={`flex items-center gap-2 p-3 rounded-lg border-2 transition-all ${
                         formData.type === key 
                           ? `border-blue-500 bg-blue-50` 
-                          : 'border-gray-200 hover:border-gray-300'
+                          : 'border-gray-100 hover:border-gray-200 bg-gray-50'
                       }`}
                     >
-                      <div className={`w-8 h-8 rounded-lg ${color} flex items-center justify-center`}>
+                      <div className={`w-8 h-8 rounded-lg ${color} flex items-center justify-center shadow-sm`}>
                         <Icon className="w-4 h-4 text-white" />
                       </div>
                       <span className="text-sm font-medium">{label}</span>
@@ -569,7 +894,7 @@ export default function PostesTab() {
               <button
                 type="button"
                 onClick={handleGeolocate}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-xl hover:bg-blue-100 transition-colors font-medium"
               >
                 <Crosshair className="w-4 h-4" />
                 Utiliser ma position actuelle
@@ -631,16 +956,16 @@ export default function PostesTab() {
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
+                  className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50 font-medium transition-colors"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium transition-colors"
+                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium transition-colors shadow-sm"
                 >
-                  {isSubmitting ? 'Enregistrement...' : isEditing ? 'Mettre à jour' : 'Créer'}
+                  {isSubmitting ? 'Enregistrement...' : isEditing ? 'Mettre à jour' : 'Créer le poste'}
                 </button>
               </div>
             </form>
@@ -650,3 +975,4 @@ export default function PostesTab() {
     </div>
   );
 }
+
