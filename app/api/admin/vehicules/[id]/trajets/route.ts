@@ -107,11 +107,53 @@ export async function GET(
 
     // Enrichir avec les calculs de vitesse entre postes
     const enrichedTrips = trips.map((trip) => {
-      const passages = trip.passages;
+      const allPoints: any[] = [];
+
+      if (trip.departLat && trip.departLng) {
+        allPoints.push({
+          id: `start-${trip.id}`,
+          poste: {
+            id: 'start',
+            nom: `Départ: ${trip.pointDepart}`,
+            type: 'DEPART',
+            ville: trip.pointDepart,
+            region: '',
+            latitude: trip.departLat,
+            longitude: trip.departLng,
+          },
+          agent: null,
+          timestampPassage: trip.dateDepart,
+          statut: 'VALIDE',
+          observations: 'Démarré par le conducteur',
+          dureeTraitement: 0,
+        });
+      }
+
+      allPoints.push(...trip.passages);
+
+      if (trip.statut === 'TERMINE' && trip.destinationLat && trip.destinationLng && trip.dateArriveeReelle) {
+        allPoints.push({
+          id: `end-${trip.id}`,
+          poste: {
+            id: 'end',
+            nom: `Arrivée: ${trip.destination}`,
+            type: 'ARRIVEE',
+            ville: trip.destination,
+            region: '',
+            latitude: trip.destinationLat,
+            longitude: trip.destinationLng,
+          },
+          agent: null,
+          timestampPassage: trip.dateArriveeReelle,
+          statut: 'VALIDE',
+          observations: 'Clôturé par le conducteur',
+          dureeTraitement: 0,
+        });
+      }
 
       // Construire les segments entre passages consécutifs
-      const passagesWithSegments = passages.map((passage, index) => {
-        const next = passages[index + 1];
+      const passagesWithSegments = allPoints.map((passage, index) => {
+        const next = allPoints[index + 1];
 
         let segmentSuivant: {
           dureeMinutes: number;
@@ -193,9 +235,9 @@ export async function GET(
 
       // Durée totale (entre premier et dernier passage)
       let dureeTotaleMinutes: number | null = null;
-      if (passages.length >= 2) {
-        const debut = new Date(passages[0].timestampPassage).getTime();
-        const fin = new Date(passages[passages.length - 1].timestampPassage).getTime();
+      if (allPoints.length >= 2) {
+        const debut = new Date(allPoints[0].timestampPassage).getTime();
+        const fin = new Date(allPoints[allPoints.length - 1].timestampPassage).getTime();
         dureeTotaleMinutes = Math.round((fin - debut) / 60_000);
       }
 
@@ -221,7 +263,7 @@ export async function GET(
         nbPassagers: trip._count.passagers,
         passages: passagesWithSegments,
         stats: {
-          nbPostes: passages.length,
+          nbPostes: trip.passages.length,
           vitesseMax,
           distanceTotaleKm: Math.round(distanceTotale * 10) / 10,
           dureeTotaleMinutes,

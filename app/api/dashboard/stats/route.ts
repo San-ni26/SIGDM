@@ -10,18 +10,16 @@ import { prisma } from '@/lib/prisma';
 import { requireSuperAdmin } from '@/lib/auth/jwt';
 import { SECURITY_HEADERS } from '@/lib/security/config';
 import { checkRateLimit, apiRateLimiter, getClientIP } from '@/lib/security/rate-limit';
-import { paginationSchema } from '@/lib/security/validation';
+import { cache, CACHE_KEYS } from '@/lib/cache';
 
 /**
- * GET /api/dashboard/stats
- * Récupérer les statistiques globales du dashboard
+ * GET /api/dashboard/stats - VERSION OPTIMISÉE AVEC CACHE
  */
 export async function GET(request: NextRequest) {
   try {
-    // 1. Vérifier l'authentification
     const session = await requireSuperAdmin(request);
     
-    // 2. Rate limiting
+    // Rate limiting
     const clientIP = getClientIP(request);
     const rateLimitResult = await checkRateLimit(apiRateLimiter, `dashboard:${clientIP}`);
     
@@ -32,12 +30,30 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    // 3. Récupérer les paramètres de requête
     const { searchParams } = new URL(request.url);
-    const range = searchParams.get('range') || '24h'; // 24h, 7d, 30d
+    const range = searchParams.get('range') || '24h';
     const regionFilter = session.niveauAcces === 'REGIONAL' ? session.regionId : searchParams.get('region');
     
-    // 4. Calculer les dates
+    // Clé de cache unique
+    const cacheKey = `${CACHE_KEYS.STATS_GLOBALES}:${range}:${regionFilter || 'all'}`;
+    
+    // Vérifier le cache (TTL: 60 secondes)
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return NextResponse.json({
+        success: true,
+        cached: true,
+        data: cached,
+      }, {
+        headers: {
+          ...SECURITY_HEADERS,
+          'X-Cache': 'HIT',
+          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+        }
+      });
+    }
+    
+    // Calculer les dates
     const now = new Date();
     let startDate: Date;
     
@@ -48,11 +64,11 @@ export async function GET(request: NextRequest) {
       case '30d':
         startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         break;
-      default: // 24h
+      default:
         startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     }
     
-    // 5. Récupérer les statistiques en parallèle
+    // Récupérer les statistiques en parallèle
     const [
       totalStats,
       todayStats,
@@ -61,42 +77,38 @@ export async function GET(request: NextRequest) {
       recentAnomalies,
       topAgents,
       vehiculesByType,
-      passagesByHour,
     ] = await Promise.all([
-      // Statistiques globales
       getGlobalStats(startDate, regionFilter),
-      // Statistiques du jour
       getTodayStats(regionFilter),
-      // Trajets récents
       getRecentTrips(10, regionFilter),
-      // Postes actifs
       getActivePostes(regionFilter),
-      // Anomalies récentes
       getRecentAnomalies(5, regionFilter),
-      // Top agents
       getTopAgents(5, startDate, regionFilter),
-      // Véhicules par type
       getVehiculesByType(regionFilter),
-      // Passages par heure
-      getPassagesByHour(startDate, regionFilter),
     ]);
+    
+    const result = {
+      range,
+      stats: totalStats,
+      today: todayStats,
+      recentTrips,
+      activePostes,
+      recentAnomalies,
+      topAgents,
+      vehiculesByType,
+    };
+    
+    // Mettre en cache pour 60 secondes
+    cache.set(cacheKey, result, 60);
     
     return NextResponse.json({
       success: true,
-      data: {
-        range,
-        stats: totalStats,
-        today: todayStats,
-        recentTrips,
-        activePostes,
-        recentAnomalies,
-        topAgents,
-        vehiculesByType,
-        passagesByHour,
-      },
+      cached: false,
+      data: result,
     }, {
       headers: {
         ...SECURITY_HEADERS,
+        'X-Cache': 'MISS',
         'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
       }
     });

@@ -43,7 +43,7 @@ export async function PUT(
 
     const { id } = await params;
     const body = await request.json();
-    const { statut } = body;
+    const { statut, lat, lng } = body;
 
     if (!statut) {
       return NextResponse.json({ error: 'Le statut est requis' }, { status: 400 });
@@ -66,9 +66,19 @@ export async function PUT(
 
     const dataToUpdate: any = { statut };
     
-    // Si on termine le trajet, on peut enregistrer la date d'arrivée réelle
-    if (statut === 'TERMINE' && existingTrip.statut !== 'TERMINE') {
-      dataToUpdate.dateArriveeReelle = new Date();
+    if (statut === 'EN_COURS') {
+      if (lat && lng) {
+        dataToUpdate.departLat = lat;
+        dataToUpdate.departLng = lng;
+      }
+    } else if (statut === 'TERMINE') {
+      if (existingTrip.statut !== 'TERMINE') {
+        dataToUpdate.dateArriveeReelle = new Date();
+      }
+      if (lat && lng) {
+        dataToUpdate.destinationLat = lat;
+        dataToUpdate.destinationLng = lng;
+      }
     }
 
     const updatedTrip = await prisma.trip.update({

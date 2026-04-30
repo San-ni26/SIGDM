@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * API AGENT – RECHERCHE DE TRAJETS
+ * API AGENT – RECHERCHE DE TRAJETS (VERSION OPTIMISÉE)
  * GET /api/agent/trajets/recherche?query=ABC123
  * ============================================================================
  */
@@ -46,6 +46,64 @@ export async function GET(request: NextRequest) {
     // Recherche par plaque ou référence
     const isPlaque = /^[A-Z]{2}-\d{4}-[A-Z]{2}$/i.test(query) || query.length < 10;
     
+    // Champs sélectionnés optimisés (pas d'include inutile)
+    const tripSelect = {
+      id: true,
+      reference: true,
+      pointDepart: true,
+      destination: true,
+      dateDepart: true,
+      statut: true,
+      vehicle: {
+        select: {
+          id: true,
+          plaque: true,
+          typeVehicle: true,
+          marque: true,
+          modele: true,
+        },
+      },
+      driver: {
+        select: {
+          id: true,
+          matricule: true,
+          nom: true,
+          prenom: true,
+          telephone: true,
+        },
+      },
+      // Limiter les passagers aux 10 premiers
+      passagers: {
+        select: {
+          id: true,
+          matricule: true,
+          nom: true,
+          prenom: true,
+          telephone: true,
+          typePersonne: true,
+        },
+        take: 10,
+      },
+      // Limiter les passages aux 5 derniers
+      passages: {
+        select: {
+          id: true,
+          posteId: true,
+          timestampPassage: true,
+          statut: true,
+        },
+        orderBy: { timestampPassage: 'desc' as const },
+        take: 5,
+      },
+      _count: {
+        select: {
+          passages: true,
+          anomalies: true,
+          passagers: true,
+        },
+      },
+    };
+    
     let trips;
     
     if (isPlaque) {
@@ -62,52 +120,7 @@ export async function GET(request: NextRequest) {
             in: ['EN_PREPARATION', 'EN_COURS'],
           },
         },
-        include: {
-          vehicle: {
-            select: {
-              id: true,
-              plaque: true,
-              typeVehicle: true,
-              marque: true,
-              modele: true,
-              nombrePlaces: true,
-            },
-          },
-          driver: {
-            select: {
-              id: true,
-              matricule: true,
-              nom: true,
-              prenom: true,
-              telephone: true,
-            },
-          },
-          passagers: {
-            select: {
-              id: true,
-              matricule: true,
-              nom: true,
-              prenom: true,
-              telephone: true,
-              typePersonne: true,
-            },
-          },
-          passages: {
-            select: {
-              id: true,
-              posteId: true,
-              timestampPassage: true,
-              statut: true,
-            },
-            orderBy: { timestampPassage: 'desc' },
-          },
-          _count: {
-            select: {
-              passages: true,
-              anomalies: true,
-            },
-          },
-        },
+        select: tripSelect,
         orderBy: { dateDepart: 'desc' },
         take: 10,
       });
@@ -120,52 +133,7 @@ export async function GET(request: NextRequest) {
             mode: 'insensitive',
           },
         },
-        include: {
-          vehicle: {
-            select: {
-              id: true,
-              plaque: true,
-              typeVehicle: true,
-              marque: true,
-              modele: true,
-              nombrePlaces: true,
-            },
-          },
-          driver: {
-            select: {
-              id: true,
-              matricule: true,
-              nom: true,
-              prenom: true,
-              telephone: true,
-            },
-          },
-          passagers: {
-            select: {
-              id: true,
-              matricule: true,
-              nom: true,
-              prenom: true,
-              telephone: true,
-              typePersonne: true,
-            },
-          },
-          passages: {
-            select: {
-              id: true,
-              posteId: true,
-              timestampPassage: true,
-              statut: true,
-            },
-            orderBy: { timestampPassage: 'desc' },
-          },
-          _count: {
-            select: {
-              passages: true,
-              anomalies: true,
-            },
-          },
-        },
+        select: tripSelect,
         take: 5,
       });
     }

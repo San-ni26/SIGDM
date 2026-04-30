@@ -1,9 +1,8 @@
 /**
  * ============================================================================
- * API CITOYEN – DÉCLARER UN TRAJET
- * POST /api/citoyen/me/trajets  (s'ajoute au GET existant)
+ * API CITOYEN – MES TRAJETS (VERSION OPTIMISÉE)
+ * GET /api/citoyen/me/trajets
  * ============================================================================
- * Le citoyen déclare un trajet avec son véhicule, ses passagers et sa destination
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,7 +13,7 @@ import { JWT_SECRET } from '@/lib/security/config';
 
 const secretKey = new TextEncoder().encode(JWT_SECRET);
 
-async function getCitoyenAuth(request: NextRequest): Promise<{ citoyenId: string; userId: string } | null> {
+async function getCitoyenAuth(request: NextRequest) {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('citoyen_token')?.value;
@@ -24,31 +23,25 @@ async function getCitoyenAuth(request: NextRequest): Promise<{ citoyenId: string
       audience: 'transport-ml-citoyen',
       issuer: 'transport-ml-auth',
     });
-    return { citoyenId: (payload as any).citoyenId, userId: (payload as any).userId };
+    return payload as { citoyenId: string; userId: string };
   } catch {
     return null;
   }
 }
 
-/** Génère une référence de trajet unique (ex: TRP-2024-XXXXX) */
-async function generateTripReference(): Promise<string> {
-  const year = new Date().getFullYear();
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
-  let ref: string;
-  let attempts = 0;
-  do {
-    const suffix = Array.from({ length: 5 }, () =>
-      chars[Math.floor(Math.random() * chars.length)]
-    ).join('');
-    ref = `TRP-${year}-${suffix}`;
-    const exists = await prisma.trip.findUnique({ where: { reference: ref } });
-    if (!exists) break;
-    attempts++;
-  } while (attempts < 20);
-  return ref!;
+function generateTripReference(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const date = new Date();
+  const dateStr = date.getFullYear().toString().slice(-2) +
+    String(date.getMonth() + 1).padStart(2, '0') +
+    String(date.getDate()).padStart(2, '0');
+  const random = Array.from({ length: 4 }, () =>
+    chars[Math.floor(Math.random() * chars.length)]
+  ).join('');
+  return `TRJ-${dateStr}-${random}`;
 }
 
-/** GET – Liste des trajets du citoyen */
+/** GET – Liste paginée des trajets du citoyen */
 export async function GET(request: NextRequest) {
   try {
     const auth = await getCitoyenAuth(request);
@@ -58,9 +51,10 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
-    const limit = Math.min(50, parseInt(searchParams.get('limit') || '10'));
+    const limit = Math.min(20, Math.max(1, parseInt(searchParams.get('limit') || '10')));
     const skip = (page - 1) * limit;
 
+    // Requêtes parallèles optimisées
     const [trajets, total] = await Promise.all([
       prisma.trip.findMany({
         where: {
@@ -69,23 +63,43 @@ export async function GET(request: NextRequest) {
             { driverId: auth.citoyenId },
           ],
         },
-        skip,
-        take: limit,
-        orderBy: { dateDepart: 'desc' },
-        include: {
-          vehicle: { select: { plaque: true, typeVehicle: true, marque: true, modele: true } },
-          passagers: { select: { id: true, nom: true, prenom: true, typePersonne: true, matricule: true } },
-          passages: {
-            orderBy: { timestampPassage: 'asc' },
+        select: {
+          id: true,
+          reference: true,
+          pointDepart: true,
+          destination: true,
+          dateDepart: true,
+          dateArriveeEstimee: true,
+          statut: true,
+          createdAt: true,
+          vehicle: {
             select: {
               id: true,
-              timestampPassage: true,
-              statut: true,
-              poste: { select: { nom: true, ville: true, type: true } },
+              plaque: true,
+              typeVehicle: true,
+              marque: true,
             },
           },
-          _count: { select: { passages: true, passagers: true, anomalies: true } },
+          // Limiter les passagers
+          passagers: {
+            select: {
+              id: true,
+              matricule: true,
+              nom: true,
+              prenom: true,
+            },
+            take: 5,
+          },
+          _count: {
+            select: {
+              passagers: true,
+              passages: true,
+            },
+          },
         },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
       }),
       prisma.trip.count({
         where: {
@@ -97,22 +111,35 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
+    // Trajets où le citoyen est passager (limité à 5)
     const passagerTrips = await prisma.passagerTrip.findMany({
       where: { citoyenId: auth.citoyenId },
       take: 5,
       orderBy: { createdAt: 'desc' },
-      include: {
+      select: {
         trip: {
           select: {
-            reference: true, pointDepart: true, destination: true,
-            dateDepart: true, statut: true,
-            vehicle: { select: { plaque: true, typeVehicle: true } },
+            reference: true,
+            pointDepart: true,
+            destination: true,
+            dateDepart: true,
+            statut: true,
+            vehicle: {
+              select: { plaque: true, typeVehicle: true },
+            },
           },
         },
       },
     });
 
-    return NextResponse.json({ data: trajets, passagerTrips, total, page, limit, pages: Math.ceil(total / limit) });
+    return NextResponse.json({
+      data: trajets,
+      passagerTrips,
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Erreur serveur' }, { status: 500 });
   }
@@ -133,7 +160,7 @@ export async function POST(request: NextRequest) {
       destination,
       dateDepart,
       dateArriveeEstimee,
-      passagerIds,     // array of citoyenId for passengers
+      passagerIds,
       notes,
     } = body;
 
@@ -144,7 +171,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Vérifier que le véhicule appartient au citoyen
+    // Vérifier le véhicule
     const vehicle = await prisma.vehicle.findUnique({
       where: { id: vehicleId },
       select: { id: true, plaque: true, statut: true, proprietaireCitoyenId: true },
@@ -164,14 +191,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Récupérer les infos des passagers si fournis
-    let passagers: { citoyenId: string; matricule: string; nom: string; prenom: string; telephone: string; typePersonne: string }[] = [];
+    // Récupérer les passagers en une seule requête
+    let passagers: any[] = [];
     if (Array.isArray(passagerIds) && passagerIds.length > 0) {
       const citoyens = await prisma.citoyen.findMany({
         where: { id: { in: passagerIds } },
-        select: { id: true, matricule: true, nom: true, prenom: true, telephone: true, typePersonne: true },
+        select: {
+          id: true,
+          matricule: true,
+          nom: true,
+          prenom: true,
+          telephone: true,
+          typePersonne: true,
+        },
       });
-      passagers = citoyens.map(c => ({
+      passagers = citoyens.map((c) => ({
         citoyenId: c.id,
         matricule: c.matricule,
         nom: c.nom,
@@ -181,7 +215,7 @@ export async function POST(request: NextRequest) {
       }));
     }
 
-    const reference = await generateTripReference();
+    const reference = generateTripReference();
 
     // Créer le trajet en transaction
     const trip = await prisma.$transaction(async (tx) => {
@@ -196,55 +230,54 @@ export async function POST(request: NextRequest) {
           destination: destination.trim(),
           dateDepart: new Date(dateDepart),
           dateArriveeEstimee: dateArriveeEstimee ? new Date(dateArriveeEstimee) : null,
-          notes: notes?.trim() || null,
           statut: 'EN_PREPARATION',
+          notes: notes?.trim() || null,
+        },
+        select: {
+          id: true,
+          reference: true,
+          pointDepart: true,
+          destination: true,
+          dateDepart: true,
+          statut: true,
         },
       });
 
-      // Ajouter les passagers
+      // Créer les passagers en batch
       if (passagers.length > 0) {
         await tx.passagerTrip.createMany({
-          data: passagers.map(p => ({
+          data: passagers.map((p) => ({
             tripId: newTrip.id,
             citoyenId: p.citoyenId,
             matricule: p.matricule,
             nom: p.nom,
             prenom: p.prenom,
             telephone: p.telephone,
-            typePersonne: p.typePersonne as any,
+            typePersonne: p.typePersonne,
           })),
-          skipDuplicates: true,
         });
       }
 
       return newTrip;
     });
 
-    // Audit log
-    await prisma.auditLog.create({
+    // Audit log hors transaction (fire-and-forget)
+    prisma.auditLog.create({
       data: {
         userId: auth.userId,
-        actionType: 'DECLARATION',
+        actionType: 'CREATION',
         entityType: 'Trip',
         entityId: trip.id,
-        description: `Déclaration trajet ${reference} – ${pointDepart} → ${destination}`,
+        description: `Déclaration trajet ${reference}`,
       },
-    });
+    }).catch(console.error);
 
-    return NextResponse.json({
-      success: true,
-      trip: {
-        id: trip.id,
-        reference: trip.reference,
-        pointDepart: trip.pointDepart,
-        destination: trip.destination,
-        dateDepart: trip.dateDepart,
-        statut: trip.statut,
-        passagersCount: passagers.length,
-      },
-    }, { status: 201 });
+    return NextResponse.json({ success: true, data: trip }, { status: 201 });
   } catch (error: any) {
-    console.error('Erreur déclaration trajet:', error);
-    return NextResponse.json({ error: error.message || 'Erreur serveur' }, { status: 500 });
+    console.error('Erreur création trajet:', error);
+    return NextResponse.json(
+      { error: error.message || 'Erreur serveur' },
+      { status: 500 }
+    );
   }
 }

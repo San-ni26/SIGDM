@@ -7,7 +7,7 @@ import {
   Shield, LogOut, Car, MapPin, Clock, AlertTriangle,
   BadgeCheck, ChevronRight, Users, RefreshCw, User,
   Phone, Calendar, CheckCircle, XCircle, Loader2,
-  Plus, Edit, Trash2,
+  Plus, Edit, Trash2, Play,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -75,6 +75,58 @@ export default function CitoyenDashboard() {
 
   useEffect(() => { loadSession(); }, [loadSession]);
   useEffect(() => { if (citoyen) loadTrips(); }, [citoyen, loadTrips]);
+
+  const handleDeleteVehicle = async (id: string, plaque: string) => {
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer le véhicule ${plaque} ?`)) return;
+    try {
+      const res = await fetch(`/api/citoyen/vehicules/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Erreur lors de la suppression');
+        return;
+      }
+      loadSession(); // Recharge les données du citoyen
+    } catch {
+      alert('Erreur de connexion');
+    }
+  };
+
+  const handleUpdateTripStatus = async (id: string, nouveauStatut: string) => {
+    try {
+      let lat = null;
+      let lng = null;
+
+      if (navigator.geolocation) {
+        try {
+          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              timeout: 10000,
+              maximumAge: 0
+            });
+          });
+          lat = position.coords.latitude;
+          lng = position.coords.longitude;
+        } catch (err) {
+          console.warn("Géolocalisation impossible ou refusée", err);
+        }
+      }
+
+      const res = await fetch(`/api/citoyen/trajets/${id}/statut`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ statut: nouveauStatut, lat, lng }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || 'Erreur lors de la mise à jour du statut');
+        return;
+      }
+      loadTrips(); // Recharge les trajets
+    } catch {
+      alert('Erreur de connexion');
+    }
+  };
 
   const handleLogout = async () => {
     await fetch('/api/citoyen/auth/session', { method: 'POST' });
@@ -298,7 +350,7 @@ export default function CitoyenDashboard() {
                         Modifier
                       </button>
                       <button 
-                        onClick={() => {/* TODO: implémenter suppression */}}
+                        onClick={() => handleDeleteVehicle(v.id, v.plaque)}
                         className="flex items-center justify-center p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
                         title="Supprimer"
                       >
@@ -383,6 +435,30 @@ export default function CitoyenDashboard() {
                             )}
                           </div>
                         </div>
+
+                        {/* Actions Rapides pour le statut du trajet */}
+                        {(trip.statut === 'EN_PREPARATION' || trip.statut === 'EN_COURS') && (
+                          <div className="flex flex-col gap-2 mt-2 sm:mt-0">
+                            {trip.statut === 'EN_PREPARATION' && (
+                              <button
+                                onClick={() => handleUpdateTripStatus(trip.id, 'EN_COURS')}
+                                className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors whitespace-nowrap"
+                                title="Démarrer le trajet"
+                              >
+                                <Play className="w-3.5 h-3.5" /> Démarrer
+                              </button>
+                            )}
+                            {trip.statut === 'EN_COURS' && (
+                              <button
+                                onClick={() => handleUpdateTripStatus(trip.id, 'TERMINE')}
+                                className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-xs font-medium rounded-lg transition-colors whitespace-nowrap"
+                                title="Clôturer le trajet"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" /> Terminer
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

@@ -127,13 +127,33 @@ export default function TrajetsPage() {
   const handleUpdateStatus = async (tripId: string, newStatus: string) => {
     try {
       setUpdatingId(tripId);
+
+      let lat = null;
+      let lng = null;
+
+      if ((newStatus === 'EN_COURS' || newStatus === 'TERMINE') && navigator.geolocation) {
+        try {
+          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              timeout: 10000,
+              maximumAge: 0
+            });
+          });
+          lat = position.coords.latitude;
+          lng = position.coords.longitude;
+        } catch (err) {
+          console.warn("Géolocalisation impossible ou refusée", err);
+        }
+      }
+
       const res = await fetch(`/api/entreprise/trajets/${tripId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'X-Requested-With': 'XMLHttpRequest'
         },
-        body: JSON.stringify({ statut: newStatus })
+        body: JSON.stringify({ statut: newStatus, lat, lng })
       });
 
       if (!res.ok) throw new Error('Erreur lors de la mise à jour du statut');
