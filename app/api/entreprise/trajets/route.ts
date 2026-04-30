@@ -129,6 +129,7 @@ export async function POST(request: NextRequest) {
       typeMarchandise,
       poidsMarchandise,
       valeurMarchandise,
+      passagersIds,
     } = body;
 
     if (!vehicleId || !conducteurId || !pointDepart || !destination || !dateDepart) {
@@ -140,6 +141,25 @@ export async function POST(request: NextRequest) {
 
     const isEntreprise = session.type === 'ENTREPRISE';
     const reference = generateTripReference();
+
+    // Préparer les passagers si fournis
+    let passagersData: any[] = [];
+    if (passagersIds && Array.isArray(passagersIds) && passagersIds.length > 0) {
+      // Récupérer les détails des citoyens pour le snapshot
+      const citoyensToAccompaniment = await prisma.citoyen.findMany({
+        where: { id: { in: passagersIds } },
+        select: { id: true, matricule: true, nom: true, prenom: true, telephone: true }
+      });
+      
+      passagersData = citoyensToAccompaniment.map(c => ({
+        citoyenId: c.id,
+        matricule: c.matricule,
+        nom: c.nom,
+        prenom: c.prenom,
+        telephone: c.telephone || '',
+        typePersonne: 'ADULTE'
+      }));
+    }
 
     const newTrip = await prisma.trip.create({
       data: {
@@ -156,6 +176,7 @@ export async function POST(request: NextRequest) {
         poidsMarchandise: poidsMarchandise ? parseFloat(poidsMarchandise) : null,
         valeurMarchandise: valeurMarchandise ? parseFloat(valeurMarchandise) : null,
         statut: 'EN_PREPARATION',
+        passagers: passagersData.length > 0 ? { create: passagersData } : undefined,
       },
       select: {
         id: true,

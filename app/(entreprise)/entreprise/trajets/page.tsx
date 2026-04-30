@@ -52,7 +52,8 @@ export default function TrajetsPage() {
     dateDepart: '',
     typeMarchandise: '',
     poidsMarchandise: '',
-    valeurMarchandise: ''
+    valeurMarchandise: '',
+    passagersIds: [] as string[]
   });
 
   const loadData = useCallback(async () => {
@@ -114,7 +115,7 @@ export default function TrajetsPage() {
       setShowAddModal(false);
       setFormData({
         vehicleId: '', conducteurId: '', pointDepart: '', destination: '',
-        dateDepart: '', typeMarchandise: '', poidsMarchandise: '', valeurMarchandise: ''
+        dateDepart: '', typeMarchandise: '', poidsMarchandise: '', valeurMarchandise: '', passagersIds: []
       });
       await loadData();
     } catch (error: any) {
@@ -447,6 +448,42 @@ export default function TrajetsPage() {
                       ))}
                     </select>
                   </div>
+                  
+                  {/* Accompagnants (Optionnel) */}
+                  {formData.conducteurId && chauffeurs.length > 1 && (
+                    <div className="pt-2">
+                      <label className="block text-sm font-medium text-white/70 mb-2">Accompagnants / Co-pilotes (Optionnel)</label>
+                      <div className="space-y-2 max-h-32 overflow-y-auto bg-white/5 p-3 rounded-xl border border-white/10">
+                        {chauffeurs
+                          .filter((c: any) => c.citoyen.id !== formData.conducteurId)
+                          .map((c: any) => (
+                            <label key={c.citoyen.id} className="flex items-center gap-3 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={formData.passagersIds.includes(c.citoyen.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setFormData({
+                                      ...formData,
+                                      passagersIds: [...formData.passagersIds, c.citoyen.id]
+                                    });
+                                  } else {
+                                    setFormData({
+                                      ...formData,
+                                      passagersIds: formData.passagersIds.filter(id => id !== c.citoyen.id)
+                                    });
+                                  }
+                                }}
+                                className="w-4 h-4 rounded border-white/20 bg-white/10 text-purple-600 focus:ring-purple-500"
+                              />
+                              <span className="text-sm text-white/90">
+                                {c.citoyen.nom} {c.citoyen.prenom} <span className="text-white/50 text-xs">({c.citoyen.matricule})</span>
+                              </span>
+                            </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Itinéraire */}
