@@ -34,7 +34,7 @@ const prismaClientSingleton = () => {
     max: 10,                    // Maximum 10 connexions simultanées
     min: 2,                     // Minimum 2 connexions maintenues
     idleTimeoutMillis: 30000,   // Fermer les connexions inactives après 30s
-    connectionTimeoutMillis: 5000, // Timeout de connexion 5s
+    connectionTimeoutMillis: 30000, // Timeout de connexion 30s (augmenté)
     allowExitOnIdle: true,        // Permettre la sortie si idle
   });
   
