@@ -143,11 +143,10 @@ export default function SettingsTab() {
               <button
                 key={id}
                 onClick={() => setActiveSection(id as any)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                  activeSection === id
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeSection === id
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-gray-600 hover:bg-gray-100'
-                }`}
+                  }`}
               >
                 <Icon className="w-4 h-4" />
                 {label}
@@ -379,11 +378,10 @@ export default function SettingsTab() {
                       key={value}
                       type="button"
                       onClick={() => setAdminForm({ ...adminForm, niveauAcces: value as any })}
-                      className={`flex flex-col p-3 rounded-xl border-2 transition-all text-left ${
-                        adminForm.niveauAcces === value
+                      className={`flex flex-col p-3 rounded-xl border-2 transition-all text-left ${adminForm.niveauAcces === value
                           ? 'border-blue-500 bg-blue-50'
                           : 'border-gray-200 hover:border-gray-300'
-                      }`}
+                        }`}
                     >
                       <span className="font-medium text-sm">{label}</span>
                       <span className="text-xs text-gray-500">{desc}</span>

@@ -2,68 +2,41 @@
  * ============================================================================
  * API AGENT – SESSION & DÉCONNEXION
  * GET  /api/agent/auth/session  – Retourne la session active
- * POST /api/agent/auth/session  – Déconnexion (clear cookie)
+ * POST /api/agent/auth/session  – Déconnexion (révocation en DB + clear cookie)
  * ============================================================================
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { jwtVerify } from 'jose';
-import { cookies } from 'next/headers';
 import prisma from '@/lib/prisma';
-import { JWT_SECRET, COOKIE_CONFIG } from '@/lib/security/config';
-
-const secretKey = new TextEncoder().encode(JWT_SECRET);
+import { SECURITY_HEADERS } from '@/lib/security/config';
+import { verifyUnifiedSession, revokeUnifiedSession } from '@/lib/auth/unified-session';
 
 export async function GET(_request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('agent_token')?.value;
+    const session = await verifyUnifiedSession('AGENT');
 
-    if (!token) {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
+    if (!session || !session.agentId) {
+      return NextResponse.json({ authenticated: false }, { status: 401, headers: SECURITY_HEADERS });
     }
 
-    let payload: any;
-    try {
-      const result = await jwtVerify(token, secretKey, {
-        algorithms: ['HS256'],
-        audience: 'transport-ml-agent',
-        issuer: 'transport-ml-auth',
-      });
-      payload = result.payload;
-    } catch {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
-    }
-
-    // Charger l'agent depuis la DB
     const agent = await prisma.agent.findUnique({
-      where: { id: payload.agentId },
+      where: { id: session.agentId },
       include: {
         user: { select: { status: true, email: true } },
         poste: {
           select: {
-            id: true,
-            nom: true,
-            ville: true,
-            region: true,
-            type: true,
-            statut: true,
-            latitude: true,
-            longitude: true,
+            id: true, nom: true, ville: true, region: true,
+            type: true, statut: true, latitude: true, longitude: true,
           },
         },
         _count: {
-          select: {
-            passages: true,
-            anomaliesSignalees: true,
-            verifications: true,
-          },
+          select: { passages: true, anomaliesSignalees: true, verifications: true },
         },
       },
     });
 
     if (!agent || agent.user.status !== 'ACTIF') {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
+      return NextResponse.json({ authenticated: false }, { status: 401, headers: SECURITY_HEADERS });
     }
 
     return NextResponse.json({
@@ -86,24 +59,18 @@ export async function GET(_request: NextRequest) {
           verifications: agent._count.verifications,
         },
       },
-    });
-  } catch (error: any) {
+    }, { headers: SECURITY_HEADERS });
+  } catch (error) {
     console.error('Erreur session agent:', error);
-    return NextResponse.json({ authenticated: false }, { status: 500 });
+    return NextResponse.json({ authenticated: false }, { status: 500, headers: SECURITY_HEADERS });
   }
 }
 
 export async function POST(_request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    cookieStore.set({
-      name: 'agent_token',
-      value: '',
-      ...COOKIE_CONFIG,
-      maxAge: 0,
-    });
-    return NextResponse.json({ success: true, message: 'Déconnecté avec succès' });
+    await revokeUnifiedSession('AGENT');
+    return NextResponse.json({ success: true, message: 'Déconnecté avec succès' }, { headers: SECURITY_HEADERS });
   } catch {
-    return NextResponse.json({ error: 'Erreur lors de la déconnexion' }, { status: 500 });
+    return NextResponse.json({ error: 'Erreur lors de la déconnexion' }, { status: 500, headers: SECURITY_HEADERS });
   }
 }

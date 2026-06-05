@@ -179,6 +179,16 @@ export async function getSession(
     // Récupérer les informations complètes depuis la base de données
     const { prisma } = await import('../prisma');
     
+    // Vérifier que la session est toujours active (non révoquée, non expirée)
+    if (payload.sessionId) {
+      const session = await prisma.userSession.findUnique({
+        where: { id: payload.sessionId },
+      });
+      if (!session || session.revokedAt || session.expiresAt < new Date()) {
+        return null;
+      }
+    }
+    
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
       include: { superAdmin: true },
@@ -277,6 +287,18 @@ export async function refreshSession(): Promise<SessionData | null> {
     if (!refreshToken) return null;
     
     const payload = await verifyToken(refreshToken);
+    
+    // Vérifier que la session est toujours active en base
+    if (payload.sessionId) {
+      const { prisma } = await import('../prisma');
+      const session = await prisma.userSession.findUnique({
+        where: { id: payload.sessionId },
+      });
+      if (!session || session.revokedAt || session.expiresAt < new Date()) {
+        await clearAuthCookies();
+        return null;
+      }
+    }
     
     // Générer de nouveaux tokens
     const newAccessToken = await generateAccessToken({

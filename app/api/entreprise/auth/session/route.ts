@@ -1,54 +1,34 @@
 /**
  * ============================================================================
- * API ENTREPRISE – SESSION
- * GET /api/entreprise/auth/session
+ * API ENTREPRISE – SESSION & DÉCONNEXION
+ * GET  /api/entreprise/auth/session  – Retourne la session active
+ * POST /api/entreprise/auth/session  – Déconnexion (révocation DB + cookie)
  * ============================================================================
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { jwtVerify } from 'jose';
-import { cookies } from 'next/headers';
 import prisma from '@/lib/prisma';
-import { JWT_SECRET } from '@/lib/security/config';
+import { SECURITY_HEADERS } from '@/lib/security/config';
+import { verifyUnifiedSession, revokeUnifiedSession } from '@/lib/auth/unified-session';
 
-const secretKey = new TextEncoder().encode(JWT_SECRET);
-
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('entreprise_token')?.value;
+    const session = await verifyUnifiedSession('ENTREPRISE');
 
-    if (!token) {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
-    }
-
-    let payload: any;
-    try {
-      const result = await jwtVerify(token, secretKey, {
-        algorithms: ['HS256'],
-        audience: 'transport-ml-entreprise',
-        issuer: 'transport-ml-auth',
-      });
-      payload = result.payload;
-    } catch {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
+    if (!session || !session.entrepriseId) {
+      return NextResponse.json({ authenticated: false }, { status: 401, headers: SECURITY_HEADERS });
     }
 
     const entreprise = await prisma.entreprise.findUnique({
-      where: { id: payload.entrepriseId },
+      where: { id: session.entrepriseId },
       include: {
         user: { select: { status: true } },
-        _count: {
-          select: {
-            vehicules: true,
-            trajets: true,
-          },
-        },
+        _count: { select: { vehicules: true, trajets: true } },
       },
     });
 
     if (!entreprise || entreprise.user.status !== 'ACTIF') {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
+      return NextResponse.json({ authenticated: false }, { status: 401, headers: SECURITY_HEADERS });
     }
 
     return NextResponse.json({
@@ -67,19 +47,18 @@ export async function GET(request: NextRequest) {
           trajets: entreprise._count.trajets,
         },
       },
-    });
-  } catch (error: any) {
+    }, { headers: SECURITY_HEADERS });
+  } catch (error) {
     console.error('Erreur session entreprise:', error);
-    return NextResponse.json({ authenticated: false }, { status: 500 });
+    return NextResponse.json({ authenticated: false }, { status: 500, headers: SECURITY_HEADERS });
   }
 }
 
 export async function POST() {
   try {
-    const cookieStore = await cookies();
-    cookieStore.delete('entreprise_token');
-    return NextResponse.json({ success: true });
+    await revokeUnifiedSession('ENTREPRISE');
+    return NextResponse.json({ success: true }, { headers: SECURITY_HEADERS });
   } catch {
-    return NextResponse.json({ error: 'Erreur lors de la déconnexion' }, { status: 500 });
+    return NextResponse.json({ error: 'Erreur lors de la déconnexion' }, { status: 500, headers: SECURITY_HEADERS });
   }
 }

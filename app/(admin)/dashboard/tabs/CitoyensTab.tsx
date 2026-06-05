@@ -214,9 +214,13 @@ export default function CitoyensTab() {
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                            {citoyen.prenom[0]}{citoyen.nom[0]}
-                          </div>
+                          {citoyen.photoUrl ? (
+                            <img src={citoyen.photoUrl} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
+                          ) : (
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                              {citoyen.prenom[0]}{citoyen.nom[0]}
+                            </div>
+                          )}
                           <div>
                             <p className="font-medium text-gray-900 text-sm">{citoyen.prenom} {citoyen.nom}</p>
                             <p className="text-xs text-gray-500">{citoyen.typePersonne === 'ADULTE' ? 'Adulte' : 'Enfant'} · {citoyen.genre === 'MASCULIN' ? 'M' : citoyen.genre === 'FEMININ' ? 'F' : 'Autre'}</p>
@@ -293,9 +297,13 @@ export default function CitoyensTab() {
             <div className="p-4 space-y-4">
               {/* Avatar + infos principales */}
               <div className="flex items-center gap-3">
-                <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center text-white font-bold text-xl">
-                  {selectedCitoyen.prenom[0]}{selectedCitoyen.nom[0]}
-                </div>
+                {selectedCitoyen.photoUrl ? (
+                  <img src={selectedCitoyen.photoUrl} alt="" className="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
+                ) : (
+                  <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center text-white font-bold text-xl flex-shrink-0">
+                    {selectedCitoyen.prenom[0]}{selectedCitoyen.nom[0]}
+                  </div>
+                )}
                 <div>
                   <p className="font-semibold text-gray-900">{selectedCitoyen.prenom} {selectedCitoyen.nom}</p>
                   <p className="text-xs font-mono text-blue-600 bg-blue-50 px-2 py-0.5 rounded mt-0.5">{selectedCitoyen.matricule}</p>

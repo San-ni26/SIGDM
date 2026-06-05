@@ -3,49 +3,46 @@
  * API AGENT – CONNEXION
  * POST /api/agent/auth/connexion
  * ============================================================================
- * Connexion agent par email + mot de passe
- * L'agent doit être assigné à un poste actif pour se connecter
+ * - Rate limiting anti brute-force
+ * - Session enregistrée en DB (révocable)
+ * - Erreurs internes masquées
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { SignJWT } from 'jose';
-import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import prisma from '@/lib/prisma';
-import { JWT_SECRET, COOKIE_CONFIG } from '@/lib/security/config';
-
-const secretKey = new TextEncoder().encode(JWT_SECRET);
-
-async function buildAgentToken(agentId: string, userId: string, matriculeAgent: string, typeAgent: string, posteId: string | null): Promise<string> {
-  return new SignJWT({
-    agentId,
-    userId,
-    matriculeAgent,
-    typeAgent,
-    posteId,
-    type: 'AGENT',
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('12h')
-    .setAudience('transport-ml-agent')
-    .setIssuer('transport-ml-auth')
-    .sign(secretKey);
-}
+import { SECURITY_HEADERS } from '@/lib/security/config';
+import {
+  createUnifiedSession,
+  checkLoginRateLimit,
+  resetLoginRateLimit,
+} from '@/lib/auth/unified-session';
+import { getClientIP } from '@/lib/security/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { email, password } = body;
-
-    if (!email || !password) {
+    // 1. Rate limiting
+    const rl = await checkLoginRateLimit(request, 'agent_login');
+    if (rl.blocked) {
       return NextResponse.json(
-        { error: 'Email et mot de passe requis' },
-        { status: 400 }
+        { error: 'Trop de tentatives. Réessayez dans quelques minutes.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfter), ...SECURITY_HEADERS } }
       );
     }
 
-    // Trouver l'utilisateur par email
+    // 2. Parser le body
+    let email: string, password: string;
+    try {
+      ({ email, password } = await request.json());
+    } catch {
+      return NextResponse.json({ error: 'Corps de requête invalide' }, { status: 400, headers: SECURITY_HEADERS });
+    }
+
+    if (!email || !password) {
+      return NextResponse.json({ error: 'Email et mot de passe requis' }, { status: 400, headers: SECURITY_HEADERS });
+    }
+
+    // 3. Rechercher l'utilisateur
     const user = await prisma.user.findUnique({
       where: { email: email.trim().toLowerCase() },
       include: {
@@ -57,88 +54,65 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (!user || !user.agent) {
-      return NextResponse.json(
-        { error: 'Email ou mot de passe incorrect' },
-        { status: 401 }
-      );
-    }
-
-    // Vérifier le type d'utilisateur
     const validAgentTypes = ['AGENT_CONTROLE', 'AGENT_DOUANE', 'AGENT_PEAGE'];
-    if (!validAgentTypes.includes(user.userType)) {
-      return NextResponse.json(
-        { error: 'Accès non autorisé à cet espace' },
-        { status: 403 }
-      );
+
+    if (!user || !user.agent || !validAgentTypes.includes(user.userType)) {
+      return NextResponse.json({ error: 'Email ou mot de passe incorrect' }, { status: 401, headers: SECURITY_HEADERS });
     }
 
-    // Vérifier le mot de passe
+    // 4. Vérifier le mot de passe
     if (!user.passwordHash) {
-      return NextResponse.json(
-        { error: 'Compte non configuré. Contactez l\'administrateur.' },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: 'Compte non configuré. Contactez l\'administrateur.' }, { status: 403, headers: SECURITY_HEADERS });
     }
 
     const passwordValid = await bcrypt.compare(password, user.passwordHash);
     if (!passwordValid) {
-      return NextResponse.json(
-        { error: 'Email ou mot de passe incorrect' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Email ou mot de passe incorrect' }, { status: 401, headers: SECURITY_HEADERS });
     }
 
-    // Vérifier le statut du compte
+    // 5. Vérifier le statut du compte
     if (user.status !== 'ACTIF') {
       const msgs: Record<string, string> = {
         INACTIF: 'Votre compte est désactivé. Contactez l\'administrateur.',
         SUSPENDU: 'Votre compte est suspendu.',
         EN_ATTENTE: 'Votre compte est en attente de validation.',
       };
-      return NextResponse.json(
-        { error: msgs[user.status] || 'Compte inactif' },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: msgs[user.status] || 'Compte inactif' }, { status: 403, headers: SECURITY_HEADERS });
     }
 
     const agent = user.agent;
 
-    // Générer le token JWT agent
-    const token = await buildAgentToken(
-      agent.id,
-      user.id,
-      agent.matriculeAgent,
-      agent.typeAgent,
-      agent.posteId
-    );
+    // 6. Réinitialiser le rate limit après succès
+    await resetLoginRateLimit(request, 'agent_login');
 
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        userId: user.id,
-        actionType: 'CONNEXION',
-        entityType: 'Agent',
-        entityId: agent.id,
-        description: `Connexion agent ${agent.matriculeAgent} – ${agent.prenom} ${agent.nom}`,
-        ipAddress: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown',
-      },
-    });
+    // 7. Créer la session en DB + générer le cookie JWT
+    await createUnifiedSession('AGENT', user.id, {
+      userId: user.id,
+      role: 'AGENT',
+      agentId: agent.id,
+      matriculeAgent: agent.matriculeAgent,
+      typeAgent: agent.typeAgent,
+      posteId: agent.posteId,
+    }, request);
 
-    // Mise à jour lastLoginAt
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() },
-    });
-
-    // Définir le cookie
-    const cookieStore = await cookies();
-    cookieStore.set({
-      name: 'agent_token',
-      value: token,
-      ...COOKIE_CONFIG,
-      maxAge: 12 * 60 * 60, // 12 heures
-    });
+    // 8. Audit log + lastLoginAt
+    await Promise.all([
+      prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          actionType: 'CONNEXION',
+          entityType: 'Agent',
+          entityId: agent.id,
+          description: `Connexion agent ${agent.matriculeAgent} – ${agent.prenom} ${agent.nom}`,
+          ipAddress: getClientIP(request),
+          userAgent: request.headers.get('user-agent') || undefined,
+        },
+      }),
+      prisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      }),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -151,12 +125,10 @@ export async function POST(request: NextRequest) {
         grade: agent.grade,
         poste: agent.poste,
       },
-    });
-  } catch (error: any) {
+    }, { headers: SECURITY_HEADERS });
+
+  } catch (error) {
     console.error('Erreur connexion agent:', error);
-    return NextResponse.json(
-      { error: error.message || 'Erreur serveur lors de la connexion' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Erreur interne du serveur' }, { status: 500, headers: SECURITY_HEADERS });
   }
 }

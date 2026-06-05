@@ -1,47 +1,26 @@
 /**
  * ============================================================================
  * API CITOYEN – SESSION & DÉCONNEXION
- * GET  /api/citoyen/auth/session      – Retourne la session active
- * POST /api/citoyen/auth/session      – Déconnexion (clear cookie)
+ * GET  /api/citoyen/auth/session  – Retourne la session active
+ * POST /api/citoyen/auth/session  – Déconnexion (révocation DB + cookie)
  * ============================================================================
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { jwtVerify } from 'jose';
-import { cookies } from 'next/headers';
 import prisma from '@/lib/prisma';
-import { JWT_SECRET, COOKIE_CONFIG } from '@/lib/security/config';
+import { SECURITY_HEADERS } from '@/lib/security/config';
+import { verifyUnifiedSession, revokeUnifiedSession } from '@/lib/auth/unified-session';
 
-const secretKey = new TextEncoder().encode(JWT_SECRET);
-
-/**
- * GET – Vérifie et retourne la session citoyen active
- */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('citoyen_token')?.value;
+    const session = await verifyUnifiedSession('CITOYEN');
 
-    if (!token) {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
+    if (!session || !session.citoyenId) {
+      return NextResponse.json({ authenticated: false }, { status: 401, headers: SECURITY_HEADERS });
     }
 
-    // Vérifier le JWT
-    let payload: any;
-    try {
-      const result = await jwtVerify(token, secretKey, {
-        algorithms: ['HS256'],
-        audience: 'transport-ml-citoyen',
-        issuer: 'transport-ml-auth',
-      });
-      payload = result.payload;
-    } catch {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
-    }
-
-    // Charger le citoyen depuis la DB
     const citoyen = await prisma.citoyen.findUnique({
-      where: { id: payload.citoyenId },
+      where: { id: session.citoyenId },
       include: {
         user: { select: { status: true, email: true } },
         vehicules: {
@@ -50,17 +29,13 @@ export async function GET(request: NextRequest) {
           orderBy: { createdAt: 'desc' },
         },
         _count: {
-          select: {
-            vehicules: true,
-            trajetsDeclares: true,
-            passagerTrips: true,
-          },
+          select: { vehicules: true, trajetsDeclares: true, passagerTrips: true },
         },
       },
     });
 
     if (!citoyen || citoyen.user.status !== 'ACTIF') {
-      return NextResponse.json({ authenticated: false }, { status: 401 });
+      return NextResponse.json({ authenticated: false }, { status: 401, headers: SECURITY_HEADERS });
     }
 
     return NextResponse.json({
@@ -85,28 +60,18 @@ export async function GET(request: NextRequest) {
           passagerTrips: citoyen._count.passagerTrips,
         },
       },
-    });
-  } catch (error: any) {
+    }, { headers: SECURITY_HEADERS });
+  } catch (error) {
     console.error('Erreur session citoyen:', error);
-    return NextResponse.json({ authenticated: false }, { status: 500 });
+    return NextResponse.json({ authenticated: false }, { status: 500, headers: SECURITY_HEADERS });
   }
 }
 
-/**
- * POST – Déconnexion (efface le cookie citoyen)
- */
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    cookieStore.set({
-      name: 'citoyen_token',
-      value: '',
-      ...COOKIE_CONFIG,
-      maxAge: 0,
-    });
-
-    return NextResponse.json({ success: true, message: 'Déconnecté avec succès' });
-  } catch (error) {
-    return NextResponse.json({ error: 'Erreur lors de la déconnexion' }, { status: 500 });
+    await revokeUnifiedSession('CITOYEN');
+    return NextResponse.json({ success: true, message: 'Déconnecté avec succès' }, { headers: SECURITY_HEADERS });
+  } catch {
+    return NextResponse.json({ error: 'Erreur lors de la déconnexion' }, { status: 500, headers: SECURITY_HEADERS });
   }
 }

@@ -30,6 +30,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Cet email est déjà utilisé' }, { status: 409 });
     }
 
+    const existingPhone = await prisma.superAdmin.findUnique({ where: { telephone: telephone.trim() } });
+    if (existingPhone) {
+      return NextResponse.json({ error: 'Ce numéro de téléphone est déjà enregistré' }, { status: 409 });
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
 
     const superAdmin = await prisma.$transaction(async (tx) => {

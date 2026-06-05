@@ -4,7 +4,8 @@
  * POST /api/citoyen/auth/inscription
  * ============================================================================
  * Crée un compte voyageur individuel avec matricule auto-généré.
- * Aucun mot de passe requis : connexion via téléphone+matricule ou plaque+PIN.
+ * La photo de profil est reçue en base64 (compressée côté client via Canvas)
+ * et stockée directement en base de données dans le champ photoUrl.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -46,9 +47,10 @@ export async function POST(request: NextRequest) {
       ville,
       region,
       adresse,
+      photoBase64,   // ← base64 compressé envoyé par le client
     } = body;
 
-    // Validation des champs obligatoires
+    // ── Validation des champs obligatoires ───────────────────────────────────
     if (!nom || !prenom || !dateNaissance || !lieuNaissance || !genre || !typePersonne || !telephone) {
       return NextResponse.json(
         { error: 'Champs obligatoires manquants (nom, prénom, date naissance, lieu, genre, type, téléphone)' },
@@ -56,7 +58,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Vérifier que le téléphone n'est pas déjà utilisé
+    // ── Validation de la photo base64 ────────────────────────────────────────
+    if (
+      !photoBase64 ||
+      typeof photoBase64 !== 'string' ||
+      !photoBase64.startsWith('data:image/')
+    ) {
+      return NextResponse.json(
+        { error: 'La photo de profil est obligatoire et doit être une image base64 valide.' },
+        { status: 400 }
+      );
+    }
+
+    // Vérification de la taille (base64 → ~75% de la taille réelle)
+    // On limite à ~800 Ko en base64 (≈ 600 Ko image compressée)
+    const MAX_BASE64_LENGTH = 800 * 1024; // 800 Ko
+    if (photoBase64.length > MAX_BASE64_LENGTH) {
+      return NextResponse.json(
+        { error: 'La photo est trop volumineuse après compression. Veuillez choisir une image plus petite.' },
+        { status: 400 }
+      );
+    }
+
+    // ── Unicité téléphone ────────────────────────────────────────────────────
     const existingTel = await prisma.citoyen.findUnique({ where: { telephone: telephone.trim() } });
     if (existingTel) {
       return NextResponse.json(
@@ -65,7 +89,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Vérifier l'email si fourni
+    // ── Unicité email ────────────────────────────────────────────────────────
     if (email) {
       const existingEmail = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
       if (existingEmail) {
@@ -78,7 +102,7 @@ export async function POST(request: NextRequest) {
 
     const matricule = await generateMatricule();
 
-    // Créer le compte en transaction
+    // ── Création en transaction ──────────────────────────────────────────────
     const citoyen = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -103,6 +127,8 @@ export async function POST(request: NextRequest) {
           ville: ville?.trim() || null,
           region: region?.trim() || null,
           adresse: adresse?.trim() || null,
+          // Stockage direct du base64 compressé dans la colonne photo_url
+          photoUrl: photoBase64,
         },
         include: {
           user: { select: { id: true, status: true } },
@@ -110,7 +136,7 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    // Générer un token JWT citoyen et connecter automatiquement
+    // ── Génération JWT ───────────────────────────────────────────────────────
     const token = await new SignJWT({
       citoyenId: citoyen.id,
       userId: citoyen.userId,
@@ -124,7 +150,7 @@ export async function POST(request: NextRequest) {
       .setIssuer('transport-ml-auth')
       .sign(secretKey);
 
-    // Enregistrer le log d'audit
+    // ── Log d'audit ──────────────────────────────────────────────────────────
     await prisma.auditLog.create({
       data: {
         userId: citoyen.userId,
@@ -136,7 +162,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Définir le cookie citoyen
+    // ── Cookie de session ────────────────────────────────────────────────────
     const cookieStore = await cookies();
     cookieStore.set({
       name: 'citoyen_token',
@@ -159,11 +185,9 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Erreur serveur lors de l\'inscription';
     console.error('Erreur inscription citoyen:', error);
-    return NextResponse.json(
-      { error: error.message || 'Erreur serveur lors de l\'inscription' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

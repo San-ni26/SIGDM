@@ -5,41 +5,51 @@
  * ============================================================================
  * Deux modes :
  *  - "telephone" : vérification téléphone + matricule
- *  - "vehicule"  : vérification plaque + code PIN à 4 chiffres
+ *  - "vehicule"  : vérification plaque + code PIN (comparaison sécurisée)
+ *
+ * SÉCURITÉ :
+ * - Rate limiting anti brute-force
+ * - Session enregistrée en DB (révocable)
+ * - PIN comparé via bcrypt si hashé, ou comparaison timing-safe sinon
+ * - Erreurs internes masquées
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { SignJWT } from 'jose';
-import { cookies } from 'next/headers';
+import bcrypt from 'bcryptjs';
 import prisma from '@/lib/prisma';
-import { JWT_SECRET, COOKIE_CONFIG } from '@/lib/security/config';
-
-const secretKey = new TextEncoder().encode(JWT_SECRET);
-
-async function buildCitoyenToken(citoyenId: string, userId: string, matricule: string): Promise<string> {
-  return new SignJWT({
-    citoyenId,
-    userId,
-    matricule,
-    type: 'CITOYEN',
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('7d')
-    .setAudience('transport-ml-citoyen')
-    .setIssuer('transport-ml-auth')
-    .sign(secretKey);
-}
+import { SECURITY_HEADERS } from '@/lib/security/config';
+import {
+  createUnifiedSession,
+  checkLoginRateLimit,
+  resetLoginRateLimit,
+} from '@/lib/auth/unified-session';
+import { getClientIP } from '@/lib/security/rate-limit';
+import { timingSafeEqual } from 'crypto';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { mode } = body;
+    // 1. Rate limiting
+    const rl = await checkLoginRateLimit(request, 'citoyen_login');
+    if (rl.blocked) {
+      return NextResponse.json(
+        { error: 'Trop de tentatives. Réessayez dans quelques minutes.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfter), ...SECURITY_HEADERS } }
+      );
+    }
 
+    // 2. Parser le body
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Corps de requête invalide' }, { status: 400, headers: SECURITY_HEADERS });
+    }
+
+    const { mode } = body;
     if (!mode || !['telephone', 'vehicule'].includes(mode)) {
       return NextResponse.json(
         { error: 'Mode de connexion invalide (telephone ou vehicule)' },
-        { status: 400 }
+        { status: 400, headers: SECURITY_HEADERS }
       );
     }
 
@@ -58,10 +68,7 @@ export async function POST(request: NextRequest) {
       const { telephone, matricule } = body;
 
       if (!telephone || !matricule) {
-        return NextResponse.json(
-          { error: 'Téléphone et matricule requis' },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: 'Téléphone et matricule requis' }, { status: 400, headers: SECURITY_HEADERS });
       }
 
       const found = await prisma.citoyen.findFirst({
@@ -73,10 +80,7 @@ export async function POST(request: NextRequest) {
       });
 
       if (!found) {
-        return NextResponse.json(
-          { error: 'Téléphone ou matricule incorrect' },
-          { status: 401 }
-        );
+        return NextResponse.json({ error: 'Téléphone ou matricule incorrect' }, { status: 401, headers: SECURITY_HEADERS });
       }
       citoyen = found;
     }
@@ -86,10 +90,7 @@ export async function POST(request: NextRequest) {
       const { plaque, pin } = body;
 
       if (!plaque || !pin) {
-        return NextResponse.json(
-          { error: 'Numéro de plaque et code PIN requis' },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: 'Numéro de plaque et code PIN requis' }, { status: 400, headers: SECURITY_HEADERS });
       }
 
       const vehicle = await prisma.vehicle.findUnique({
@@ -101,28 +102,42 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      if (!vehicle || vehicle.codePin !== pin.trim()) {
-        return NextResponse.json(
-          { error: 'Plaque ou code PIN incorrect' },
-          { status: 401 }
-        );
+      if (!vehicle || !vehicle.proprietaireCitoyen) {
+        return NextResponse.json({ error: 'Plaque ou code PIN incorrect' }, { status: 401, headers: SECURITY_HEADERS });
       }
 
-      if (!vehicle.proprietaireCitoyen) {
-        return NextResponse.json(
-          { error: 'Ce véhicule n\'a pas de propriétaire enregistré' },
-          { status: 403 }
-        );
+      // Comparaison sécurisée du PIN (timing-safe)
+      // Si le PIN est hashé avec bcrypt (commence par $2), on compare avec bcrypt
+      // Sinon on utilise timingSafeEqual pour éviter les timing attacks
+      const storedPin = vehicle.codePin || '';
+      let pinValid = false;
+
+      if (storedPin.startsWith('$2')) {
+        // PIN hashé avec bcrypt
+        pinValid = await bcrypt.compare(pin.trim(), storedPin);
+      } else {
+        // PIN en clair — comparaison timing-safe
+        try {
+          const a = Buffer.from(storedPin.padEnd(64));
+          const b = Buffer.from(pin.trim().padEnd(64));
+          pinValid = storedPin.length === pin.trim().length && timingSafeEqual(a, b);
+        } catch {
+          pinValid = false;
+        }
+      }
+
+      if (!pinValid) {
+        return NextResponse.json({ error: 'Plaque ou code PIN incorrect' }, { status: 401, headers: SECURITY_HEADERS });
       }
 
       citoyen = vehicle.proprietaireCitoyen;
     }
 
     if (!citoyen) {
-      return NextResponse.json({ error: 'Connexion impossible' }, { status: 401 });
+      return NextResponse.json({ error: 'Connexion impossible' }, { status: 401, headers: SECURITY_HEADERS });
     }
 
-    // Vérifier le statut du compte
+    // 3. Vérifier le statut du compte
     if (citoyen.user.status !== 'ACTIF') {
       const msgs: Record<string, string> = {
         INACTIF: 'Votre compte est désactivé.',
@@ -131,39 +146,39 @@ export async function POST(request: NextRequest) {
       };
       return NextResponse.json(
         { error: msgs[citoyen.user.status] || 'Compte inactif' },
-        { status: 403 }
+        { status: 403, headers: SECURITY_HEADERS }
       );
     }
 
-    // Générer le token JWT citoyen
-    const token = await buildCitoyenToken(citoyen.id, citoyen.userId, citoyen.matricule);
+    // 4. Réinitialiser le rate limit
+    await resetLoginRateLimit(request, 'citoyen_login');
 
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        userId: citoyen.userId,
-        actionType: 'CONNEXION',
-        entityType: 'Citoyen',
-        entityId: citoyen.id,
-        description: `Connexion citoyen ${citoyen.matricule} via mode ${mode}`,
-        ipAddress: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown',
-      },
-    });
+    // 5. Créer la session en DB + cookie
+    await createUnifiedSession('CITOYEN', citoyen.userId, {
+      userId: citoyen.userId,
+      role: 'CITOYEN',
+      citoyenId: citoyen.id,
+      matricule: citoyen.matricule,
+    }, request);
 
-    // Mise à jour lastLoginAt
-    await prisma.user.update({
-      where: { id: citoyen.userId },
-      data: { lastLoginAt: new Date() },
-    });
-
-    // Définir le cookie
-    const cookieStore = await cookies();
-    cookieStore.set({
-      name: 'citoyen_token',
-      value: token,
-      ...COOKIE_CONFIG,
-      maxAge: 7 * 24 * 60 * 60,
-    });
+    // 6. Audit + lastLoginAt
+    await Promise.all([
+      prisma.auditLog.create({
+        data: {
+          userId: citoyen.userId,
+          actionType: 'CONNEXION',
+          entityType: 'Citoyen',
+          entityId: citoyen.id,
+          description: `Connexion citoyen ${citoyen.matricule} via mode ${mode}`,
+          ipAddress: getClientIP(request),
+          userAgent: request.headers.get('user-agent') || undefined,
+        },
+      }),
+      prisma.user.update({
+        where: { id: citoyen.userId },
+        data: { lastLoginAt: new Date() },
+      }),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -174,12 +189,10 @@ export async function POST(request: NextRequest) {
         prenom: citoyen.prenom,
         telephone: citoyen.telephone,
       },
-    });
-  } catch (error: any) {
+    }, { headers: SECURITY_HEADERS });
+
+  } catch (error) {
     console.error('Erreur connexion citoyen:', error);
-    return NextResponse.json(
-      { error: error.message || 'Erreur serveur lors de la connexion' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Erreur interne du serveur' }, { status: 500, headers: SECURITY_HEADERS });
   }
 }

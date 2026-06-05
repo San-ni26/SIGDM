@@ -28,14 +28,19 @@ import {
   Activity,
   Clock,
   CheckCircle,
+  Building2,
+  Bus,
 } from 'lucide-react';
 
 // Import des composants d'onglets
 import OverviewTab from './tabs/OverviewTab';
 import type { DashboardStats } from './tabs/OverviewTab';
+import TrajetsTab from './tabs/TrajetsTab';
 import PostesTab from './tabs/PostesTab';
 import AgentsTab from './tabs/AgentsTab';
 import CitoyensTab from './tabs/CitoyensTab';
+import EntreprisesTab from './tabs/EntreprisesTab';
+import CompagniesTab from './tabs/CompagniesTab';
 import VehiculesTab from './tabs/VehiculesTab';
 import AnomaliesTab from './tabs/AnomaliesTab';
 import AuditTab from './tabs/AuditTab';
@@ -55,9 +60,12 @@ interface User {
 // Configuration des onglets
 const TABS = [
   { id: 'overview', label: 'Vue d\'ensemble', icon: LayoutDashboard },
+  { id: 'trajets', label: 'Trajets', icon: Map },
   { id: 'postes', label: 'Postes de contrôle', icon: MapPin },
   { id: 'agents', label: 'Agents', icon: Shield },
   { id: 'citoyens', label: 'Citoyens', icon: Users },
+  { id: 'entreprises', label: 'Entreprises', icon: Building2 },
+  { id: 'compagnies', label: 'Compagnies', icon: Bus },
   { id: 'vehicules', label: 'Véhicules', icon: Car },
   { id: 'anomalies', label: 'Anomalies', icon: AlertTriangle },
   { id: 'audit', label: 'Journal d\'audit', icon: Clock },
@@ -131,12 +139,18 @@ export default function DashboardPage() {
     switch (activeTab) {
       case 'overview':
         return <OverviewTab stats={stats} loading={loading} />;
+      case 'trajets':
+        return <TrajetsTab />;
       case 'postes':
         return <PostesTab />;
       case 'agents':
         return <AgentsTab />;
       case 'citoyens':
         return <CitoyensTab />;
+      case 'entreprises':
+        return <EntreprisesTab />;
+      case 'compagnies':
+        return <CompagniesTab />;
       case 'vehicules':
         return <VehiculesTab />;
       case 'anomalies':
